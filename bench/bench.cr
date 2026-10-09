@@ -40,14 +40,19 @@ def document_value(input : String) : YAML::Any
   YAML::Any.new(YAML.parse_all(input))
 end
 
-# Peak resident set size in KiB (Linux only).
+# Peak resident set size in KiB (benchmark tooling only; the library itself
+# never calls into C).
 def peak_rss_kb : Int64?
-  return unless File.exists?("/proc/self/status")
-  File.each_line("/proc/self/status") do |line|
-    if line.starts_with?("VmHWM:")
-      return line.split[1].to_i64
-    end
-  end
+  {% if flag?(:unix) %}
+    return unless LibC.getrusage(LibC::RUSAGE_SELF, out usage) == 0
+    # ru_maxrss is in bytes on macOS, KiB elsewhere.
+    {% if flag?(:darwin) %} usage.ru_maxrss.to_i64 // 1024 {% else %} usage.ru_maxrss.to_i64 {% end %}
+  {% end %}
+end
+
+if ARGV[0]? == "--libyaml-version"
+  puts YAML.libyaml_version
+  exit
 end
 
 if ARGV[0]? == "--rss"

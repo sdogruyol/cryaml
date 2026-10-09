@@ -3,7 +3,8 @@
 #
 #   crystal run bench/run.cr
 #
-# Needs libyaml installed for the stdlib side.
+# Needs libyaml installed for the stdlib side. Set CRYAML_LIBYAML_PREFIX to
+# link a specific libyaml build (Crystal's macOS tarball bundles an older one).
 require "json"
 require "./inputs"
 
@@ -27,16 +28,28 @@ def results(binary : String) : Array(Result)
   Array(Result).from_json(JSON.parse(output)["results"].to_json)
 end
 
-def peak_rss(binary : String, workload : String, operation : String) : Int64
+def peak_rss(binary : String, workload : String, operation : String) : Int64?
   output = Process.run(binary, ["--rss", workload, operation]) { |process| process.output.gets_to_end }
-  JSON.parse(output)["rss_kb"].as_i64
+  JSON.parse(output)["rss_kb"].as_i64?
+end
+
+def libyaml_version(binary : String) : String
+  Process.run(binary, ["--libyaml-version"]) { |process| process.output.gets_to_end.strip }
 end
 
 Dir.mkdir_p(BIN)
 cryaml_bin = File.join(BIN, "bench-cryaml")
 stdlib_bin = File.join(BIN, "bench-stdlib")
 build(cryaml_bin, [] of String)
-build(stdlib_bin, ["-Dstdlib_yaml"])
+stdlib_flags = ["-Dstdlib_yaml"]
+if prefix = ENV["CRYAML_LIBYAML_PREFIX"]?.presence
+  lib_dir = File.join(prefix, "lib")
+  stdlib_flags << "--link-flags" << "-L#{lib_dir} -Wl,-rpath,#{lib_dir}"
+end
+build(stdlib_bin, stdlib_flags)
+
+puts "Crystal #{Crystal::VERSION}, #{{{ flag?(:darwin) ? "macOS" : flag?(:win32) ? "Windows" : "Linux" }}} " \
+     "#{{{ flag?(:aarch64) ? "aarch64" : "x86_64" }}}, stdlib side on libyaml #{libyaml_version(stdlib_bin)}\n\n"
 
 STDERR.puts "running stdlib..."
 stdlib = results(stdlib_bin)
@@ -61,8 +74,11 @@ end
 puts "\n## Peak RSS, `YAML.parse_all` x5 in a fresh process (lower is better)\n\n"
 puts "| Workload | stdlib (libyaml) MB | cryaml MB |"
 puts "| --- | ---: | ---: |"
+
+def mb(kb : Int64?) : String
+  kb ? (kb / 1024.0).round(1).to_s : "n/a"
+end
+
 BenchInputs.all.each do |name, _|
-  s = peak_rss(stdlib_bin, name, "parse")
-  c = peak_rss(cryaml_bin, name, "parse")
-  puts "| #{name} | #{(s / 1024.0).round(1)} | #{(c / 1024.0).round(1)} |"
+  puts "| #{name} | #{mb(peak_rss(stdlib_bin, name, "parse"))} | #{mb(peak_rss(cryaml_bin, name, "parse"))} |"
 end

@@ -1,0 +1,45 @@
+name: Bench
+
+# stdlib (libyaml 0.2.5) vs cryaml on GitHub's hosted machines, including
+# arm64 hardware. Results go to the job summary and an artifact.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 0" # weekly
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux x86_64, os: ubuntu-24.04 }
+          - { name: linux aarch64, os: ubuntu-24.04-arm }
+          - { name: macos arm64, os: macos-15 }
+          - { name: macos x86_64, os: macos-15-intel }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+      - name: Install libyaml 0.2.5
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y libyaml-dev
+          else
+            brew install libyaml
+            echo "CRYAML_LIBYAML_PREFIX=$(brew --prefix libyaml)" >> "$GITHUB_ENV"
+          fi
+      - run: crystal run bench/run.cr > bench.md
+      - run: cat bench.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.os }}
+          path: bench.md
