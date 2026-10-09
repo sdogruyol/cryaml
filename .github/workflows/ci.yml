@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  spec:
+    name: spec (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+      # libyaml is only needed by the differential specs' oracle (the stdlib
+      # binding cryaml is compared against); cryaml itself never links it.
+      - name: Install libyaml (oracle only)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libyaml-dev; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install libyaml; fi
+      - run: crystal tool format --check src spec bench
+      - run: crystal spec --order random
+
+  pure-crystal:
+    name: no C in the library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+      - name: No lib/fun/Link declarations or LibC calls in src/
+        run: |
+          if grep -rnE '^\s*(lib|fun) |@\[Link|LibC|LibYAML' src/; then
+            echo "C bindings found in src/" >&2
+            exit 1
+          fi
+      - name: A program using cryaml does not link libyaml
+        run: |
+          mkdir -p /tmp/app/lib && ln -s "$PWD" /tmp/app/lib/cryaml
+          printf 'require "cryaml"\nputs YAML.parse("a: [1, 2]")["a"][1]\n' > /tmp/app/app.cr
+          cd /tmp/app && crystal build app.cr -o app
+          test "$(./app)" = "2"
+          if ldd ./app | grep -i yaml; then
+            echo "binary links libyaml" >&2
+            exit 1
+          fi
