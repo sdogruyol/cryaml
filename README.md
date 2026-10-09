@@ -99,10 +99,11 @@ ratio check. An 8 MB scalar or a single line with 100,000 flow items parses
 in well under a second (unoptimized spec build). libyaml's simple-key scan is
 quadratic in flow nesting depth; cryaml bounds it without changing the tokens.
 
-**Performance.** Close to libyaml: `YAML.parse_all`
-runs at 0.92x-1.09x of the stdlib's speed, the raw event walk at 0.79x-1.10x,
-the emitter at 0.76x-0.99x. Peak RSS is the same (30.6 MB vs 30.7 MB parsing
-a 1 MB document five times). Full tables: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+**Performance.** Faster than the libyaml binding. Measured on GitHub's
+Linux x86_64/aarch64 and macOS arm64/x86_64 runners: `YAML.parse_all` runs
+1.25x-3.09x as fast as the stdlib's, the raw event walk 1.46x-3.19x, the
+emitter 0.99x-1.90x. Peak RSS is about the same. Full tables and instruction
+counts: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Installation
 
@@ -199,12 +200,13 @@ The same trick runs an unmodified project's test suite on cryaml.
 | | stdlib `require "yaml"` | cryaml |
 | --- | --- | --- |
 | Engine | libyaml (C) | libyaml 0.2.5 ported to Crystal |
-| System dependency | libyaml | none |
-| API | Crystal 1.21.0 | identical |
-| Parse results, positions, errors, emitted text | libyaml 0.2.5 | identical |
-| `YAML.parse_all` speed | 1x | 0.92x-1.09x |
-| Peak RSS (1 MB document) | 30.7 MB | 30.6 MB |
-| Invalid UTF-8 given to `Builder` | can crash the process | raises `YAML::Error` |
+| System dependency | libyaml (version varies by platform) | none |
+| API | Crystal stdlib | identical (the same layers, loaded from your stdlib) |
+| Parse results, positions, errors, emitted text | libyaml 0.2.5 on most platforms | identical to libyaml 0.2.5 everywhere |
+| `YAML.parse_all` speed | 1x | 1.25x-3.09x |
+| Peak RSS | baseline | about the same |
+| Malformed UTF-8 given to `Builder` | can crash the process | raises `YAML::Error` |
+| wasm32-wasi | needs libyaml built for WASI | works |
 | Backtraces | stop at C frames | Crystal all the way |
 
 Details: [docs/COMPARISON.md](docs/COMPARISON.md). How it is built and
