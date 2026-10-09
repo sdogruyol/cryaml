@@ -1,0 +1,9 @@
+base: &b {x: 1, y: 2}
+other: &o
+  z: 3
+derived:
+  <<: *b
+  y: 20
+multi:
+  <<: [*b, *o]
+  w: 4

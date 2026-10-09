@@ -1,0 +1,3 @@
+set: !!set {a, b}
+omap: !!omap [a: 1, b: 2]
+pairs: !!pairs [a: 1, a: 2]

@@ -1,0 +1,7 @@
+? [a, b]
+: c
+? |
+  block key
+: v
+? {x: y}
+: z

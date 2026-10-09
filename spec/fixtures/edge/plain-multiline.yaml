@@ -1,0 +1,6 @@
+key: this is
+  a multiline
+
+  plain scalar
+next: x # comment
+url: http://a.b/c?d=e#f

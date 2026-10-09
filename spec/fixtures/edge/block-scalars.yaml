@@ -1,0 +1,18 @@
+a: |2
+   x
+  y
+b: >-
+  folded
+  text
+
+  para
+
+   more
+c: |+
+  keep
+
+d: >
+
+  lead
+e: |-
+  strip
