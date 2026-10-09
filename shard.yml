@@ -1,0 +1,11 @@
+name: cryaml
+version: 0.1.0
+description: |
+  Pure Crystal YAML: the stdlib YAML API without libyaml.
+
+authors:
+  - Serdar Dogruyol <990485+sdogruyol@users.noreply.github.com>
+
+crystal: '>= 1.21.0'
+
+license: MIT
