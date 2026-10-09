@@ -140,18 +140,17 @@ jobs:
           ./smoke bundle > bundle.txt
           ./smoke dump < bundle.txt > native.txt
           grep -c '^== ' bundle.txt
+      # wasm-ld's default stack is 64 KiB with no guard page. The stdlib's
+      # recursive YAML::Parser (shared with the libyaml path) overflows it at
+      # about 40 levels of nesting and silently corrupts the heap, so link a
+      # larger stack, as any deeply recursive wasm32 program must.
       - name: Build for wasm32
-        run: crystal build spec/support/target_smoke.cr -o smoke.wasm --target wasm32-wasi -Dwithout_iconv -Dwithout_openssl -Dwithout_mt
+        run: crystal build spec/support/target_smoke.cr -o smoke.wasm --target wasm32-wasi -Dwithout_iconv -Dwithout_openssl -Dwithout_mt --link-flags="-z stack-size=8388608"
         env:
           CRYSTAL_LIBRARY_PATH: /tmp/wasm32-wasi-libs
       - name: wasm32 dumps
         run: |
-          # wasm32 builds don't collect garbage, so run a few inputs per
-          # process (two lines per input) to keep memory bounded.
-          split -l 16 bundle.txt chunk.
-          for chunk in chunk.*; do
-            wasmtime run smoke.wasm dump < "$chunk"
-          done > wasm.txt
+          wasmtime run smoke.wasm dump < bundle.txt > wasm.txt
           cmp native.txt wasm.txt
 
   interpreter:
