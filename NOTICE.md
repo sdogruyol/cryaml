@@ -15,13 +15,13 @@ MIT License: [LICENSES/libyaml-MIT.txt](LICENSES/libyaml-MIT.txt).
 
 ## Crystal standard library
 
-The value, node, schema and serialization layers in `src/yaml/` (`any.cr`,
-`enums.cr`, `from_yaml.cr`, `nodes.cr`, `nodes/`, `parse_context.cr`,
-`parser.cr`, `schema/`, `serialization.cr`, `to_yaml.cr`), the mirrors in
-`src/cryaml/` and the specs in `spec/std/` are copied from Crystal 1.21.0.
-`src/yaml.cr`, `src/yaml/pull_parser.cr`, `src/yaml/builder.cr` and the
-`src/cryaml/` mirrors were modified to run on the pure Crystal engine instead
-of the libyaml binding; each says so in its header.
+cryaml loads the stdlib's own YAML layers (`YAML::Any`, `YAML::Nodes`, the
+schemas, serialization) from the installed compiler; it does not copy them.
+`src/yaml.cr`, `src/yaml/pull_parser.cr` and `src/yaml/builder.cr` are adapted
+from Crystal 1.21.0 to run on the pure Crystal engine instead of the libyaml
+binding, and `src/cryaml/{big,uri,uuid}.cr` mirror the stdlib's YAML
+extensions; each says so in its header. `spec/std/` holds Crystal 1.21.0's
+YAML specs.
 
 Copyright 2012-2026 Manas Technology Solutions. Apache License 2.0 with Swift
 exception: [LICENSES/Crystal-Apache-2.0.txt](LICENSES/Crystal-Apache-2.0.txt).

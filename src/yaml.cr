@@ -1,12 +1,31 @@
 # Adapted from Crystal 1.21.0 `src/yaml.cr` (Apache-2.0): `libyaml_version`
-# no longer calls into libyaml. Everything else is unchanged, so this file can
-# replace the stdlib's `yaml.cr` as is. The shard's entry point is
-# `src/cryaml.cr`.
-
+# no longer calls into libyaml, and the requires below differ. The shard's
+# entry point is `src/cryaml.cr`.
+#
+# Only the engine, `PullParser` and `Builder` live in this repository. The
+# layers above them (Any, Nodes, schema, serialization, from/to_yaml) are
+# loaded from the stdlib of the compiler in use, so they always match it.
+# Merged into the stdlib, this block becomes the stdlib's own:
+#
+#     require "./yaml/*"
+#     require "./yaml/schema/*"
+#     require "./yaml/schema/core/*"
+#     require "./yaml/nodes/*"
 require "./yaml/*"
-require "./yaml/schema/*"
-require "./yaml/schema/core/*"
-require "./yaml/nodes/*"
+require "yaml/enums"
+require "yaml/any"
+require "yaml/from_yaml"
+require "yaml/parse_context"
+require "yaml/parser"
+require "yaml/serialization"
+require "yaml/to_yaml"
+require "yaml/nodes"
+require "yaml/nodes/builder"
+require "yaml/nodes/nodes"
+require "yaml/nodes/parser"
+require "yaml/schema/core"
+require "yaml/schema/core/parser"
+require "yaml/schema/fail_safe"
 require "semantic_version"
 
 require "base64"

@@ -122,7 +122,7 @@ jobs:
       - name: Install wasm-ld
         run: |
           apt-get update
-          apt-get install -y lld
+          apt-get install -y lld curl
           ln -sf "$(ls /usr/bin/wasm-ld* | head -1)" /usr/bin/wasm-ld
       - name: Download wasm32 libs
         run: |
@@ -168,7 +168,8 @@ jobs:
       - run: crystal tool format --check src spec bench scripts shim
       - name: No lib/fun/Link declarations or LibC calls in src/
         run: |
-          if grep -rnE '^\s*(lib|fun) |@\[Link|LibC|LibYAML' src/; then
+          # src/cryaml.cr names LibYAML only to detect the stdlib binding.
+          if grep -rnE '^\s*(lib|fun) |@\[Link|LibC|LibYAML' src/ | grep -v 'has_constant?("LibYAML")'; then
             echo "C bindings found in src/" >&2
             exit 1
           fi
@@ -194,9 +195,11 @@ jobs:
             exit 1
           fi
 
-  # Fails when the stdlib's YAML files change upstream (see the script).
-  stdlib-drift:
-    name: stdlib drift (${{ matrix.crystal }})
+  # cryaml loads the stdlib's own YAML layers. Check that the files it
+  # replaces haven't changed upstream, then run the stdlib's YAML specs of
+  # that exact Crystal version against cryaml (through the shim).
+  upstream:
+    name: upstream stdlib (${{ matrix.crystal }})
     strategy:
       fail-fast: false
       matrix:
@@ -211,3 +214,14 @@ jobs:
         with:
           crystal: ${{ matrix.crystal }}
       - run: crystal run scripts/stdlib_drift.cr
+      - name: The stdlib's spec/std/yaml on cryaml
+        run: |
+          version="$(crystal env CRYSTAL_VERSION)"
+          case "$version" in *-dev) ref=master ;; *) ref="$version" ;; esac
+          git clone --depth 1 --branch "$ref" https://github.com/crystal-lang/crystal.git /tmp/crystal
+          mkdir -p /tmp/crystal/lib && ln -s "$PWD" /tmp/crystal/lib/cryaml
+          cd /tmp/crystal
+          export CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)"
+          crystal build spec/std/yaml/yaml_spec.cr -o /tmp/probe
+          if ldd /tmp/probe | grep -i yaml; then echo "specs linked libyaml" >&2; exit 1; fi
+          crystal spec spec/std/yaml
