@@ -48,7 +48,10 @@ module Differential
       return binary if sources.all? { |src| File.info(src).modification_time < built }
     end
     Dir.mkdir_p(CACHE_DIR)
-    args = ["build", sources[0], "-o", binary, "--no-debug"]
+    # Build under a private name and rename, so concurrent fuzz shards never
+    # run a half-written binary.
+    partial = "#{binary}.#{Process.pid}.partial"
+    args = ["build", sources[0], "-o", partial, "--no-debug"]
     args << "--release" if release
     if cryaml
       args << "-Dcryaml"
@@ -58,6 +61,7 @@ module Differential
     end
     status = Process.run("crystal", args, output: Process::Redirect::Inherit, error: Process::Redirect::Inherit)
     raise "failed to build #{binary} (is libyaml installed?)" unless status.success?
+    File.rename(partial, binary)
     binary
   end
 
