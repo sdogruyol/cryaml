@@ -97,6 +97,31 @@ private module BuildScripts
       end
     end
   end
+
+  # Every value in every scalar style in every position the emitter treats
+  # differently: document root, block and flow sequence items, block and
+  # flow mapping keys and values.
+  def self.matrix_scripts : Array({String, String})
+    contexts = {
+      "root"      => {"", ""},
+      "block-seq" => {"seq_start BLOCK - -\n", "\nseq_end"},
+      "flow-seq"  => {"seq_start FLOW - -\n", "\nseq_end"},
+      "block-key" => {"map_start BLOCK - -\n", "\nscalar ANY - - v\nmap_end"},
+      "block-val" => {"map_start BLOCK - -\nscalar ANY - - k\n", "\nmap_end"},
+      "flow-key"  => {"map_start FLOW - -\n", "\nscalar ANY - - v\nmap_end"},
+      "flow-val"  => {"map_start FLOW - -\nscalar ANY - - k\n", "\nmap_end"},
+    }
+    scripts = [] of {String, String}
+    VALUES.each_with_index do |value, v|
+      YAML::ScalarStyle.values.each do |style|
+        contexts.each do |context, (before, after)|
+          script = "stream_start\ndoc_start implicit\n#{before}scalar #{style} - - #{esc(value)}#{after}\ndoc_end\nstream_end"
+          scripts << {"matrix-#{v}-#{style}-#{context}", script}
+        end
+      end
+    end
+    scripts
+  end
 end
 
 describe "builder differential (cryaml vs libyaml)" do
@@ -110,6 +135,9 @@ describe "builder differential (cryaml vs libyaml)" do
   end
   BuildScripts.odd_byte_scripts.each_with_index do |script, i|
     cases << Differential::Case.new("odd-bytes-#{i}", "build", script)
+  end
+  BuildScripts.matrix_scripts.each do |name, script|
+    cases << Differential::Case.new(name, "build", script)
   end
   Differential.compare("builder", cases)
 end

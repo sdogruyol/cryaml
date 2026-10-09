@@ -225,3 +225,20 @@ jobs:
           crystal build spec/std/yaml/yaml_spec.cr -o /tmp/probe
           if ldd /tmp/probe | grep -i yaml; then echo "specs linked libyaml" >&2; exit 1; fi
           crystal spec spec/std/yaml
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y kcov
+      - run: scripts/coverage.sh .cache/coverage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: .cache/coverage/report
