@@ -1,0 +1,50 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # nightly
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "How long to fuzz"
+        default: "3000"
+      seed:
+        description: "Random seed (empty: random)"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  differential:
+    name: differential fuzz vs libyaml 0.2.5 (${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: "1.21.0"
+      - run: sudo apt-get update && sudo apt-get install -y libyaml-dev
+      - run: crystal build --release --no-debug fuzz/fuzz.cr -o bin/fuzz
+      - name: Fuzz
+        env:
+          SECONDS_TO_RUN: ${{ inputs.seconds || '3000' }}
+          SEED: ${{ inputs.seed }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          seed="${SEED:-$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')}"
+          seed=$((seed + SHARD))
+          echo "seed=$seed"
+          bin/fuzz --seconds "$SECONDS_TO_RUN" --seed "$seed" --out fuzz/findings
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings-${{ matrix.shard }}
+          path: fuzz/findings
