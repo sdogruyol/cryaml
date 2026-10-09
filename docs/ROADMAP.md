@@ -24,7 +24,7 @@ flowchart LR
 | Coverage | kcov, enforced per file in CI: scanner 100%, Builder and PullParser 100%, parser 99.2%, reader 98.7%, emitter 95.0%. The rest is unreachable through the public API (emitter directives and canonical mode, defensive buffer growth). |
 | Memory safety | valgrind memcheck with `-Dgc_none` over the spec suite and 20,000 fuzzer-generated cases: no errors in engine code (the reports that remain are inside the stdlib under gc_none). Runs in CI. |
 | Upstream stdlib | cryaml loads the stdlib's own Any, Nodes, schema and serialization layers, so fixes like 1.21.1's `YAML::Any#hash` fix apply automatically. CI runs `spec/std/yaml` of 1.21.0, the latest release and nightly against cryaml, and fails if a file cryaml replaces changes upstream. |
-| Real projects | shards, ameba, crystal-i18n and totem run their test suites on cryaml with identical results to the stdlib (2,769 examples); shards, ameba and i18n run in CI. Unmodified code uses cryaml through `shim/yaml.cr`. |
+| Real projects | shards, ameba, crystal-i18n, totem and Invidious run their test suites on cryaml with results identical to the stdlib's, failures included (2,941 examples; the failures need fossil/hg, Redis or a git submodule, in both); shards, ameba and i18n run in CI. Unmodified code uses cryaml through `shim/yaml.cr`. |
 | Mixed requires | Loading the stdlib's `yaml` next to cryaml fails to compile, with an explanation when the stdlib came first. |
 | Performance | Faster than the libyaml binding on every workload on Linux x86_64/aarch64 and macOS arm64/x86_64 (`YAML.parse_all` 1.25x-3.09x; one emitter tie at 0.99x), and fewer instructions on every workload measured with callgrind. Tables in [PERFORMANCE.md](PERFORMANCE.md). |
 
