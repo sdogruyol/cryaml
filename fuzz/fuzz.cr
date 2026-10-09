@@ -38,10 +38,29 @@ module Fuzz
     paths.sort.map { |path| File.read(path) }.reject { |input| input.bytesize > 20_000 }
   end
 
+  # The reader decodes input in 16 KiB chunks, and when an encoding error
+  # surfaces depends on them. Some inputs are grown past a chunk boundary
+  # so that the mutations below can land next to it.
+  CHUNK = 16384
+
   def self.mutate(rng : Random, input : String, seeds : Array(String)) : String
     bytes = input.to_slice.to_a
+    near_boundary = !bytes.empty? && rng.rand(16) == 0
+    if near_boundary
+      target = CHUNK * (1 + rng.rand(2)) + rng.rand(64) - 32
+      while bytes.size < target + 64
+        bytes.concat(input.to_slice.to_a)
+      end
+    end
     (1 + rng.rand(4)).times do
-      pos = bytes.empty? ? 0 : rng.rand(bytes.size + 1)
+      pos =
+        if bytes.empty?
+          0
+        elsif near_boundary
+          Math.min(bytes.size, CHUNK * (1 + rng.rand(2)) + rng.rand(16) - 8)
+        else
+          rng.rand(bytes.size + 1)
+        end
       case rng.rand(9)
       when 0 # insert a token
         bytes.insert_all(pos, TOKENS.sample(rng).to_slice.to_a)
