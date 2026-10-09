@@ -162,6 +162,10 @@ flowchart LR
 - **Coverage.** `scripts/coverage.sh` (kcov) enforces per-file floors: what
   the suite doesn't reach is unreachable through the public API (emitter
   directives and canonical mode, defensive buffer growth).
+- **Memory safety.** The engine uses raw pointers in its hot loops.
+  `scripts/memcheck.sh` builds with `-Dgc_none` (plain malloc, so
+  out-of-bounds access shows up) and runs the spec suite and fuzzer-generated
+  inputs under valgrind's memcheck; CI fails on any error in engine code.
 - **Hostile input and round trips.** `spec/security_spec.cr` covers deep
   nesting, alias bombs, multi-megabyte scalars, long lines and malformed
   encodings; `spec/roundtrip_spec.cr` checks that parse, dump, parse is

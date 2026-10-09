@@ -22,10 +22,11 @@ flowchart LR
 | Line-by-line review | Reader, scanner, parser and emitter compared with libyaml function by function. Four divergences found and fixed, each reproduced first (NUL in `%TAG` prefixes, `yaml_check_utf8` semantics in `Builder`, flush order on IO errors, Int32 overflows on inputs above 1 GiB). |
 | Fuzzing | `fuzz/fuzz.cr` mutates the corpus and generates Builder scripts; both sides run as separate processes so crashes and hangs are caught. A nightly workflow runs four shards. See the README for the latest local campaign. |
 | Coverage | kcov, enforced per file in CI: scanner 100%, Builder and PullParser 100%, parser 99.2%, reader 98.7%, emitter 95.0%. The rest is unreachable through the public API (emitter directives and canonical mode, defensive buffer growth). |
+| Memory safety | valgrind memcheck with `-Dgc_none` over the spec suite and 20,000 fuzzer-generated cases: no errors in engine code (the reports that remain are inside the stdlib under gc_none). Runs in CI. |
 | Upstream stdlib | cryaml loads the stdlib's own Any, Nodes, schema and serialization layers, so fixes like 1.21.1's `YAML::Any#hash` fix apply automatically. CI runs `spec/std/yaml` of 1.21.0, the latest release and nightly against cryaml, and fails if a file cryaml replaces changes upstream. |
 | Real projects | shards, ameba, crystal-i18n and totem run their test suites on cryaml with identical results to the stdlib (2,769 examples); shards, ameba and i18n run in CI. Unmodified code uses cryaml through `shim/yaml.cr`. |
 | Mixed requires | Loading the stdlib's `yaml` next to cryaml fails to compile, with an explanation when the stdlib came first. |
-| Performance | Fewer instructions than libyaml on every measured workload (callgrind); wall-clock tables for four platforms in [PERFORMANCE.md](PERFORMANCE.md). |
+| Performance | Faster than the libyaml binding on every workload on Linux x86_64/aarch64 and macOS arm64/x86_64 (`YAML.parse_all` 1.25x-3.09x; one emitter tie at 0.99x), and fewer instructions on every workload measured with callgrind. Tables in [PERFORMANCE.md](PERFORMANCE.md). |
 
 ## Phase 1: RFC and decisions
 
