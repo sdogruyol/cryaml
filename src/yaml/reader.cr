@@ -363,14 +363,12 @@ class YAML::Reader
     out_pos = @last
     unread = @unread
     offset = @offset
-    # Bytes to decode one at a time before trying the word fast path again.
-    slow = 0
 
     while pos < last
       # Fast path: copy the printable ASCII characters (0x20..0x7E) among
       # the next eight bytes, up to the first other byte, which is then
       # decoded below.
-      if slow <= 0 && last - pos >= 8
+      if last - pos >= 8
         word = uninitialized UInt64
         pointerof(word).as(Pointer(UInt8)).copy_from(raw + pos, 8)
         mask = non_printable_ascii_mask(word)
@@ -381,7 +379,6 @@ class YAML::Reader
         offset += good
         unread += good
         next if mask == 0
-        slow = 1
       end
 
       octet = raw[pos]
@@ -397,7 +394,6 @@ class YAML::Reader
         pos += 1
         offset += 1
         unread += 1
-        slow -= 1
         next
       end
 
@@ -446,7 +442,6 @@ class YAML::Reader
       pos += width
       offset += width
       unread += 1
-      slow -= width
     end
 
     sync_decode_state(pos, out_pos, unread, offset)
