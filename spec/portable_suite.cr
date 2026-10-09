@@ -1,6 +1,6 @@
-# Spec entry point for targets that can't run the whole suite the usual way
-# (wasm32-wasi, the interpreter): everything except what needs GMP (`big`)
-# or subprocesses (the live oracle). Differential specs run in golden mode.
+# Spec entry point for the interpreter (`crystal i spec/portable_suite.cr`):
+# everything except what needs GMP (`big`). Differential specs run in golden
+# mode. (wasm32 has no exceptions; see spec/support/target_smoke.cr.)
 require "./scanner_spec"
 require "./differential_spec"
 require "./builder_differential_spec"

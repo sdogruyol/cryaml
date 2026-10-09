@@ -213,6 +213,7 @@ modes = %w(events events events events_io any_all nodes emit)
 deadline = Time.instant + seconds.seconds
 found = Set(String).new
 total = 0
+compared = 0
 STDERR.puts "fuzz: seed=#{seed} seeds=#{seeds.size} batch=#{batch} seconds=#{seconds}"
 
 while Time.instant < deadline
@@ -225,6 +226,7 @@ while Time.instant < deadline
     end
   end
   expected = Fuzz.oracle(cases)
+  compared += expected.size
   cases.each do |c|
     next unless finding = Fuzz.differs?(c, expected[Differential.key(c)]?)
     # Build scripts from the generator can make libyaml abort; only keep
@@ -237,7 +239,7 @@ while Time.instant < deadline
     end
   end
   total += cases.size
-  STDERR.puts "fuzz: #{total} cases, #{found.size} findings"
+  STDERR.puts "fuzz: #{total} cases, #{compared} compared with libyaml, #{found.size} findings"
 end
 
 exit(found.empty? ? 0 : 1)

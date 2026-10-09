@@ -107,8 +107,11 @@ jobs:
       - run: crystal --version
       - run: crystal spec --order random
 
+  # wasm32-wasi has no exception support, so the spec suite (which raises
+  # and rescues) can't run there. Instead every corpus input that parses
+  # without error is dumped natively and under wasmtime; the dumps must match.
   wasm32:
-    name: spec (wasm32-wasi)
+    name: wasm32-wasi (dumps match native)
     runs-on: ubuntu-24.04
     container: crystallang/crystal:1.21.0-build
     steps:
@@ -130,12 +133,20 @@ jobs:
           curl -LO https://github.com/lbguilherme/wasm-libs/releases/download/0.0.3/wasm32-wasi-libs.tar.gz
           echo "cd36f319f8f9f9cd08f723d10e6ec2b92f2e44d3ce3b20344b8041386d85c261  wasm32-wasi-libs.tar.gz" | sha256sum -c -
           tar -f wasm32-wasi-libs.tar.gz -C /tmp/wasm32-wasi-libs -xz
-      - name: Build
-        run: crystal build spec/portable_suite.cr -o portable.wasm --target wasm32-wasi -Dwithout_iconv -Dwithout_openssl -Dwithout_mt
+      - name: Native dumps
+        run: |
+          crystal build spec/support/target_smoke.cr -o smoke
+          ./smoke list > files.txt
+          ./smoke dump files.txt > native.txt
+          wc -l files.txt native.txt
+      - name: Build for wasm32
+        run: crystal build spec/support/target_smoke.cr -o smoke.wasm --target wasm32-wasi -Dwithout_iconv -Dwithout_openssl -Dwithout_mt
         env:
           CRYSTAL_LIBRARY_PATH: /tmp/wasm32-wasi-libs
-      - name: Run
-        run: wasmtime run --dir "$PWD::$PWD" portable.wasm
+      - name: wasm32 dumps
+        run: |
+          wasmtime run --dir "$PWD::$PWD" smoke.wasm dump "$PWD/files.txt" > wasm.txt
+          cmp native.txt wasm.txt
 
   interpreter:
     name: spec (interpreter)
