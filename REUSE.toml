@@ -73,6 +73,9 @@ SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = "samples/helm-nginx-values.yaml"
+# The file is kept byte-exact; its own tag says "APACHE-2.0", which isn't a
+# valid SPDX identifier.
+precedence = "override"
 SPDX-FileCopyrightText = "Copyright Broadcom, Inc."
 SPDX-License-Identifier = "Apache-2.0"
 
