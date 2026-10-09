@@ -1,17 +1,18 @@
 # Notice
 
 cryaml is MIT licensed (see [LICENSE](LICENSE)). It contains work derived from
-the following projects.
+the following projects. Per-file copyright and license information is in
+[REUSE.toml](REUSE.toml); license texts are in [LICENSES/](LICENSES/).
 
 ## libyaml
 
 `src/yaml/reader.cr`, `scanner.cr`, `event_parser.cr`, `emitter.cr`,
-`chars.cr` and `byte_buffer.cr` are a Crystal port of libyaml 0.2.5
-(`reader.c`, `scanner.c`, `parser.c`, `emitter.c`, `writer.c`,
-`yaml_private.h`).
+`chars.cr`, `byte_buffer.cr`, `collections.cr`, `token.cr` and `event.cr` are
+a Crystal port of libyaml 0.2.5 (`reader.c`, `scanner.c`, `parser.c`,
+`emitter.c`, `writer.c`, `yaml_private.h`, `yaml.h`).
 
 Copyright (c) 2017-2020 Ingy döt Net, Copyright (c) 2006-2016 Kirill Simonov.
-MIT License: [LICENSES/libyaml-MIT.txt](LICENSES/libyaml-MIT.txt).
+MIT License: [LICENSES/MIT.txt](LICENSES/MIT.txt).
 
 ## Crystal standard library
 
@@ -24,7 +25,8 @@ extensions; each says so in its header. `spec/std/` holds Crystal 1.21.0's
 YAML specs.
 
 Copyright 2012-2026 Manas Technology Solutions. Apache License 2.0 with Swift
-exception: [LICENSES/Crystal-Apache-2.0.txt](LICENSES/Crystal-Apache-2.0.txt).
+exception: [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt),
+[LICENSES/Swift-exception.txt](LICENSES/Swift-exception.txt).
 
 ## yaml-test-suite
 

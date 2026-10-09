@@ -295,3 +295,12 @@ jobs:
           # src/cryaml.cr), so a passing build proves cryaml was used.
           export CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)"
           crystal spec $SPECS
+
+  # Every file has copyright and license information (REUSE.toml).
+  reuse:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: fsfe/reuse-action@v5

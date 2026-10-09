@@ -1,0 +1,87 @@
+version = 1
+
+# Original code of this repository.
+[[annotations]]
+path = ["**"]
+SPDX-FileCopyrightText = "Copyright (c) 2026 Serdar Dogruyol"
+SPDX-License-Identifier = "MIT"
+
+# The engine: a port of libyaml 0.2.5.
+[[annotations]]
+path = [
+  "src/yaml/reader.cr",
+  "src/yaml/scanner.cr",
+  "src/yaml/event_parser.cr",
+  "src/yaml/emitter.cr",
+  "src/yaml/chars.cr",
+  "src/yaml/byte_buffer.cr",
+  "src/yaml/collections.cr",
+  "src/yaml/token.cr",
+  "src/yaml/event.cr",
+]
+SPDX-FileCopyrightText = [
+  "Copyright (c) 2017-2020 Ingy döt Net",
+  "Copyright (c) 2006-2016 Kirill Simonov",
+  "Copyright (c) 2026 Serdar Dogruyol",
+]
+SPDX-License-Identifier = "MIT"
+
+# Adapted from the Crystal standard library.
+[[annotations]]
+path = [
+  "src/yaml.cr",
+  "src/yaml/pull_parser.cr",
+  "src/yaml/builder.cr",
+  "src/cryaml/big.cr",
+  "src/cryaml/uri.cr",
+  "src/cryaml/uuid.cr",
+  "spec/std/**",
+]
+SPDX-FileCopyrightText = "Copyright 2012-2026 Manas Technology Solutions."
+SPDX-License-Identifier = "Apache-2.0 WITH Swift-exception"
+
+[[annotations]]
+path = "spec/fixtures/yaml-test-suite/**"
+SPDX-FileCopyrightText = "Copyright (c) 2016-2020 Ingy döt Net"
+SPDX-License-Identifier = "MIT"
+
+# Real-world samples (see samples/SOURCES.md).
+[[annotations]]
+path = [
+  "samples/ameba-crystal.yml",
+  "samples/circleci-crystal.yml",
+  "samples/gha-crystal-linux.yml",
+  "samples/shard-crystal.yml",
+]
+SPDX-FileCopyrightText = "Copyright 2012-2026 Manas Technology Solutions."
+SPDX-License-Identifier = "Apache-2.0 WITH Swift-exception"
+
+[[annotations]]
+path = "samples/gha-rust.yml"
+SPDX-FileCopyrightText = "Copyright (c) 2020 GitHub"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = "samples/compose-wordpress.yaml"
+SPDX-FileCopyrightText = "Docker, Inc. and the awesome-compose contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "samples/k8s-guestbook.yaml"
+SPDX-FileCopyrightText = "The Kubernetes Authors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "samples/helm-nginx-values.yaml"
+SPDX-FileCopyrightText = "Copyright Broadcom, Inc."
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "samples/openapi-petstore.yaml"
+SPDX-FileCopyrightText = "The Linux Foundation and the OpenAPI Initiative contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["samples/ha-configuration.yaml", "samples/ha-automations.yaml"]
+SPDX-FileCopyrightText = "Copyright (c) Franck Nijhof"
+SPDX-License-Identifier = "MIT"

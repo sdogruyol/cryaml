@@ -67,21 +67,30 @@ $ ldd app_stdlib | grep yaml        # the same program with require "yaml"
 
 ## Features
 
-**API parity.** The value, node, schema and serialization layers are copied
-unchanged from Crystal 1.21.0. Only `PullParser` and `Builder` were adapted,
-and their public methods are the same (minus the `finalize` hook, since there
-is no native memory to free). Crystal's own `spec/std/yaml` suite runs
-against cryaml in this repository and passes.
+**API parity.** cryaml loads `YAML::Any`, `YAML::Nodes`, the schemas and
+`YAML::Serializable` from your compiler's own stdlib and replaces only the
+layer that called into C. `PullParser` and `Builder` keep their public
+methods (minus the `finalize` hook: there is no native memory to free). CI
+runs the stdlib's `spec/std/yaml` of Crystal 1.21.0, the latest release and
+nightly against cryaml.
 
 **Same behavior as libyaml.** Every input in the
-[yaml-test-suite](https://github.com/yaml/yaml-test-suite), 110 edge cases
-(tabs, BOMs, UTF-16, invalid UTF-8, directives, chunk boundaries) and 12
-real-world files (Kubernetes, Docker Compose, GitHub Actions, CircleCI,
-Helm, Home Assistant, OpenAPI) is run through both cryaml and the stdlib's
-libyaml binding. Events, line/column positions, styles, tags, anchors,
-values, error messages, `YAML::Any` results, node trees and emitted YAML must
-be identical, and are. 420 generated `YAML::Builder` scripts are compared the
-same way.
+[yaml-test-suite](https://github.com/yaml/yaml-test-suite), 121 edge cases
+(tabs, BOMs, UTF-16, invalid UTF-8, directives, chunk boundaries, NUL in
+tags) and 12 real-world files (Kubernetes, Docker Compose, GitHub Actions,
+CircleCI, Helm, Home Assistant, OpenAPI) is compared with libyaml 0.2.5:
+events with line/column positions, styles, tags, anchors, values, error
+messages, `YAML::Any` results, node trees and emitted YAML must be
+identical, and are. So are 3,805 `YAML::Builder` scripts (every value in
+every scalar style in every position, plus random and invalid ones). On top:
+a line-by-line review of the port against libyaml's C source, a differential
+fuzzer that runs nightly, and 100% line coverage of the scanner (98% overall;
+the rest is unreachable through the public API).
+
+**Tested where Crystal runs.** Linux x86_64 and aarch64, macOS arm64 and
+x86_64, Windows (MSVC and MinGW-w64), Alpine with a static binary, the
+interpreter and wasm32-wasi, on every push. The ameba and crystal-i18n test
+suites and shards' unit specs pass on cryaml, unmodified.
 
 **Hostile input.** The parser is an explicit state machine, so nesting depth
 never touches the call stack; `YAML.parse` stops at 512 levels like the
