@@ -19,7 +19,7 @@ The value, node, schema and serialization layers in `src/yaml/` (`any.cr`,
 `enums.cr`, `from_yaml.cr`, `nodes.cr`, `nodes/`, `parse_context.cr`,
 `parser.cr`, `schema/`, `serialization.cr`, `to_yaml.cr`), the mirrors in
 `src/cryaml/` and the specs in `spec/std/` are copied from Crystal 1.21.0.
-`src/cryaml.cr`, `src/yaml/pull_parser.cr`, `src/yaml/builder.cr` and the
+`src/yaml.cr`, `src/yaml/pull_parser.cr`, `src/yaml/builder.cr` and the
 `src/cryaml/` mirrors were modified to run on the pure Crystal engine instead
 of the libyaml binding; each says so in its header.
 

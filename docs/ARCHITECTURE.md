@@ -90,14 +90,16 @@ The layout mirrors the stdlib's `src/yaml/`. Merging means:
 
 1. Delete `src/yaml/lib_yaml.cr`.
 2. Add the engine files listed above.
-3. Replace `src/yaml/pull_parser.cr` and `src/yaml/builder.cr` with the adapted
-   versions, and `YAML.libyaml_version` with the one from `src/cryaml.cr`.
+3. Replace `src/yaml.cr`, `src/yaml/pull_parser.cr` and `src/yaml/builder.cr`
+   with the adapted versions.
 4. Drop `yaml` from the required libraries.
 
-`src/cryaml.cr` is the stdlib's `src/yaml.cr` with only `libyaml_version`
-changed. The `src/cryaml/{big,uri,uuid}.cr` mirrors exist only because the
-stdlib's `big/yaml`, `uri/yaml` and `uuid/yaml` `require "yaml"`; after a
-merge the stdlib versions work as they are.
+`src/yaml.cr` is the stdlib's `src/yaml.cr` with only `libyaml_version`
+changed. The shard's entry point `src/cryaml.cr` only adds a check against
+loading the stdlib's `yaml` next to it, and `shim/yaml.cr` lets unmodified
+`require "yaml"` code use cryaml. The `src/cryaml/{big,uri,uuid}.cr` mirrors
+exist only because the stdlib's `big/yaml`, `uri/yaml` and `uuid/yaml`
+`require "yaml"`; after a merge none of these shard files are needed.
 
 ## Testing
 
