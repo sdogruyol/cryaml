@@ -146,7 +146,12 @@ jobs:
           CRYSTAL_LIBRARY_PATH: /tmp/wasm32-wasi-libs
       - name: wasm32 dumps
         run: |
-          wasmtime run smoke.wasm dump < bundle.txt > wasm.txt
+          # wasm32 builds don't collect garbage, so run a few inputs per
+          # process (two lines per input) to keep memory bounded.
+          split -l 16 bundle.txt chunk.
+          for chunk in chunk.*; do
+            wasmtime run smoke.wasm dump < "$chunk"
+          done > wasm.txt
           cmp native.txt wasm.txt
 
   interpreter:
