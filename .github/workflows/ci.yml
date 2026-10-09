@@ -3,44 +3,169 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  CRYSTAL_VERSION: "1.21.0"
+
 jobs:
+  # The whole suite on every native platform. Differential specs compare with
+  # the recorded libyaml 0.2.5 output (spec/fixtures/golden), so no libyaml
+  # is installed here.
   spec:
-    name: spec (${{ matrix.os }})
+    name: spec (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - { name: linux x86_64, os: ubuntu-24.04 }
+          - { name: linux aarch64, os: ubuntu-24.04-arm }
+          - { name: macos arm64, os: macos-15 }
+          - { name: macos x86_64, os: macos-15-intel }
+          - { name: windows x86_64 msvc, os: windows-2025 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - uses: crystal-lang/install-crystal@v1
         with:
-          crystal: "1.21.0"
-      # libyaml is only needed by the differential specs' oracle (the stdlib
-      # binding cryaml is compared against); cryaml itself never links it.
-      - name: Install libyaml (oracle only)
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libyaml-dev; fi
-          if [ "$RUNNER_OS" = "macOS" ]; then brew install libyaml; fi
-      - run: crystal tool format --check src spec bench
+          crystal: ${{ env.CRYSTAL_VERSION }}
       - run: crystal spec --order random
 
-  pure-crystal:
-    name: no C in the library
-    runs-on: ubuntu-latest
+  # Live comparison with libyaml 0.2.5, which also proves the golden files are
+  # current. Crystal's own macOS build links an older libyaml, so the oracle
+  # links Homebrew's 0.2.5 explicitly there.
+  oracle:
+    name: live libyaml oracle (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      CRYAML_ORACLE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - uses: crystal-lang/install-crystal@v1
         with:
-          crystal: "1.21.0"
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - name: Install libyaml 0.2.5
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y libyaml-dev
+          else
+            brew install libyaml
+            echo "CRYAML_LIBYAML_PREFIX=$(brew --prefix libyaml)" >> "$GITHUB_ENV"
+          fi
+      - name: libyaml used by the stdlib by default (informational)
+        run: crystal eval 'require "yaml"; puts YAML.libyaml_version'
+      - run: crystal spec spec/differential_spec.cr spec/builder_differential_spec.cr
+
+  alpine:
+    name: spec (alpine musl, static binary)
+    runs-on: ubuntu-24.04
+    container: crystallang/crystal:1.21.0-alpine
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: crystal spec --order random
+      - name: Static binary without libyaml
+        run: |
+          mkdir -p /tmp/app/lib && ln -s "$PWD" /tmp/app/lib/cryaml
+          printf 'require "cryaml"\nputs YAML.parse("a: [1, 2]")["a"][1]\n' > /tmp/app/app.cr
+          cd /tmp/app && crystal build --static app.cr -o app
+          test "$(./app)" = "2"
+
+  mingw:
+    name: spec (windows x86_64 mingw-w64)
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-crystal
+            mingw-w64-ucrt-x86_64-shards
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: crystal --version
+      - run: crystal spec --order random
+
+  wasm32:
+    name: spec (wasm32-wasi)
+    runs-on: ubuntu-24.04
+    container: crystallang/crystal:1.21.0-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install wasmtime
+        uses: mwilliamson/setup-wasmtime-action@1a0a4a9f366dd556ae5793e06ba39f960631f9b9 # v3
+        with:
+          wasmtime-version: "2.0.0"
+      - name: Install wasm-ld
+        run: |
+          apt-get update
+          apt-get install -y lld
+          ln -sf "$(ls /usr/bin/wasm-ld* | head -1)" /usr/bin/wasm-ld
+      - name: Download wasm32 libs
+        run: |
+          mkdir /tmp/wasm32-wasi-libs
+          curl -LO https://github.com/lbguilherme/wasm-libs/releases/download/0.0.3/wasm32-wasi-libs.tar.gz
+          echo "cd36f319f8f9f9cd08f723d10e6ec2b92f2e44d3ce3b20344b8041386d85c261  wasm32-wasi-libs.tar.gz" | sha256sum -c -
+          tar -f wasm32-wasi-libs.tar.gz -C /tmp/wasm32-wasi-libs -xz
+      - name: Build
+        run: crystal build spec/portable_suite.cr -o portable.wasm --target wasm32-wasi -Dwithout_iconv -Dwithout_openssl -Dwithout_mt
+        env:
+          CRYSTAL_LIBRARY_PATH: /tmp/wasm32-wasi-libs
+      - name: Run
+        run: wasmtime run --dir "$PWD::$PWD" portable.wasm
+
+  interpreter:
+    name: spec (interpreter)
+    runs-on: ubuntu-24.04
+    container: crystallang/crystal:1.21.0-build
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Build a compiler with interpreter support
+        run: |
+          git clone --depth 1 --branch "$CRYSTAL_VERSION" https://github.com/crystal-lang/crystal.git /tmp/crystal
+          make -C /tmp/crystal interpreter=1 release=1
+      - name: Smoke
+        run: |
+          printf 'require "./src/cryaml"\np YAML.parse("a: [1, {b: c}]")\nputs({x: 1}.to_yaml)\n' > smoke.cr
+          /tmp/crystal/bin/crystal i smoke.cr
+      - name: Specs in the interpreter
+        run: /tmp/crystal/bin/crystal i spec/portable_suite.cr
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - run: crystal tool format --check src spec bench scripts shim
       - name: No lib/fun/Link declarations or LibC calls in src/
         run: |
           if grep -rnE '^\s*(lib|fun) |@\[Link|LibC|LibYAML' src/; then
@@ -49,6 +174,7 @@ jobs:
           fi
       - name: A program using cryaml does not link libyaml
         run: |
+          sudo apt-get update && sudo apt-get install -y libyaml-dev
           mkdir -p /tmp/app/lib && ln -s "$PWD" /tmp/app/lib/cryaml
           printf 'require "cryaml"\nputs YAML.parse("a: [1, 2]")["a"][1]\n' > /tmp/app/app.cr
           cd /tmp/app && crystal build app.cr -o app
@@ -57,3 +183,31 @@ jobs:
             echo "binary links libyaml" >&2
             exit 1
           fi
+      - name: Unmodified `require "yaml"` code through the shim
+        run: |
+          cd /tmp/app
+          printf 'require "yaml"\nrequire "uuid/yaml"\nputs UUID.from_yaml(%%(50a11da6-377b-4bdf-b9f0-076f9db61c93))\n' > shim.cr
+          CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)" crystal build shim.cr -o shim
+          test "$(./shim)" = "50a11da6-377b-4bdf-b9f0-076f9db61c93"
+          if ldd ./shim | grep -i yaml; then
+            echo "binary links libyaml" >&2
+            exit 1
+          fi
+
+  # Fails when the stdlib's YAML files change upstream (see the script).
+  stdlib-drift:
+    name: stdlib drift (${{ matrix.crystal }})
+    strategy:
+      fail-fast: false
+      matrix:
+        crystal: ["1.21.0", latest, nightly]
+    runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.crystal == 'nightly' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ matrix.crystal }}
+      - run: crystal run scripts/stdlib_drift.cr
