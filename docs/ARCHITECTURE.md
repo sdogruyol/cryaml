@@ -2,18 +2,19 @@
 
 cryaml keeps the stdlib's `YAML` module and swaps out the one layer that called
 into C. Everything above `YAML::PullParser` and `YAML::Builder` is the stdlib's
-own Crystal code, copied unchanged from Crystal 1.21.0.
+own Crystal code, loaded from the installed compiler: cryaml does not copy it,
+so stdlib fixes apply automatically.
 
 ```mermaid
 flowchart TD
-    subgraph stdlib["Copied unchanged from Crystal 1.21.0"]
-        API["YAML.parse / parse_all / dump / build"]
+    subgraph stdlib["Loaded from the compiler's stdlib, unchanged"]
         Any["YAML::Any"]
         Nodes["YAML::Nodes (parser, builder)"]
         Schema["YAML::Schema::Core / FailSafe"]
         Ser["YAML::Serializable, from_yaml, to_yaml"]
     end
-    subgraph adapted["Adapted (LibYAML calls replaced)"]
+    subgraph adapted["Adapted from Crystal 1.21.0 (libyaml calls replaced)"]
+        API["src/yaml.cr: YAML.parse / parse_all / dump / build"]
         Pull["YAML::PullParser"]
         Build["YAML::Builder"]
     end
@@ -40,6 +41,7 @@ flowchart TD
 | `src/yaml/reader.cr` | `reader.c`, scanner buffer macros | Encoding detection (BOM), UTF-8/UTF-16 decoding and validation, `CACHE`/`SKIP`/`READ` primitives, position marks |
 | `src/yaml/chars.cr` | `yaml_private.h` `IS_*_AT` macros | Byte-level character classes, shared by scanner and emitter |
 | `src/yaml/byte_buffer.cr` | `yaml_string_t` | Reusable scratch strings, including libyaml's `JOIN`/`CLEAR` semantics |
+| `src/yaml/collections.cr` | `QUEUE`, `STACK` macros | Token/event queue with mid-queue insertion; state, mark and indent stacks |
 | `src/yaml/token.cr` | `yaml_token_t` | Token struct |
 | `src/yaml/scanner.cr` | `scanner.c` | Tokenizer: simple keys, indentation, flow levels, all scalar styles, tags, directives |
 | `src/yaml/event.cr` | `yaml_event_t`, `yaml_mark_t` | Event and mark structs |
@@ -62,24 +64,45 @@ text.
   encoding errors and the stdlib reported its zeroed mark. cryaml does too.
 - **Sticky errors.** After a failure every further `read_next` raises the same
   exception, as with the libyaml binding.
-- **C strings.** Tags and anchors crossed the C boundary NUL-terminated, so a
-  tag containing `%00` was truncated there. `PullParser#tag` and the builder
-  reproduce that.
+- **C strings.** libyaml returns tag URIs as C strings, so a `%00` escape ends
+  them; the scanner cuts them at the NUL, which also decides `%TAG` prefixes
+  and the `!` special case the same way. Anchors and tags given to `Builder`
+  are cut at NUL like the binding's `char*` arguments.
 - **Output buffering.** The emitter writes through a 16 KiB buffer that is
   flushed where libyaml flushes (document end, stream end, `Builder#flush`,
-  buffer full), using `IO#write_string` like the stdlib's write callback.
+  buffer full), using `IO#write_string` like the stdlib's write callback. As in
+  libyaml the buffer is emptied before writing, so output an IO failed to
+  write is dropped rather than written twice.
+- **`yaml_check_utf8`.** `Builder` accepts exactly what libyaml's event
+  constructors accept, including encoded surrogates and code points above
+  U+10FFFF, which the emitter writes as escapes.
+
+### Performance techniques
+
+The hot loops keep libyaml's structure but do less per character:
+
+- the reader validates eight bytes at a time for printable ASCII and falls
+  back to the per-byte path at the first other byte, so every error fires at
+  the same byte;
+- where the C code does `READ`/`SKIP` + `CACHE`, or `WRITE` + `FLUSH`, per
+  character, the scanner and emitter copy runs of ASCII at once. Runs stop
+  before a refill or flush would happen, so those still happen at the same
+  characters;
+- bounds on the live simple keys make most stale-key checks free;
+- `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call, no
+  clearing of dequeued 88- and 128-byte slots.
 
 ### Deliberate differences from libyaml
 
 - **Simple-key scan.** libyaml checks every saved simple key on every token,
   which is quadratic in flow nesting depth. Ported as is, scanning 50,000
-  nested `[` took 63 s in the (unoptimized) spec build. The scanner now skips
-  the prefix of keys already known to be impossible; it visits the same
-  possible keys in the same order, so tokens and errors are unchanged, and the
-  same input takes 1.5 s.
-- **Invalid UTF-8 in `Builder`.** libyaml's event constructors reject it, the
-  binding ignored the failure and re-emitted a stale event (which can end in
-  `free(): double free detected`). cryaml raises
+  nested `[` took 63 s in the (unoptimized) spec build. The scanner skips the
+  prefix of keys already known to be impossible; it visits the same possible
+  keys in the same order, so tokens and errors are unchanged, and the same
+  input takes about a second.
+- **Malformed UTF-8 in `Builder`.** libyaml's event constructors reject it;
+  the binding ignored the failure and re-emitted the previous event (which can
+  end in `free(): double free detected`). cryaml raises
   `YAML::Error("Error emitting scalar: invalid UTF-8 string")`.
 - **No `finalize`.** `PullParser` and `Builder` hold no native memory, so they
   no longer define finalizers; `close` is a no-op.
@@ -91,40 +114,59 @@ The layout mirrors the stdlib's `src/yaml/`. Merging means:
 1. Delete `src/yaml/lib_yaml.cr`.
 2. Add the engine files listed above.
 3. Replace `src/yaml.cr`, `src/yaml/pull_parser.cr` and `src/yaml/builder.cr`
-   with the adapted versions.
+   with the adapted versions (in `src/yaml.cr`, the requires go back to the
+   stdlib's relative globs, as its header shows).
 4. Drop `yaml` from the required libraries.
 
-`src/yaml.cr` is the stdlib's `src/yaml.cr` with only `libyaml_version`
-changed. The shard's entry point `src/cryaml.cr` only adds a check against
-loading the stdlib's `yaml` next to it, and `shim/yaml.cr` lets unmodified
-`require "yaml"` code use cryaml. The `src/cryaml/{big,uri,uuid}.cr` mirrors
-exist only because the stdlib's `big/yaml`, `uri/yaml` and `uuid/yaml`
-`require "yaml"`; after a merge none of these shard files are needed.
+Shard-only files, unneeded after a merge: `src/cryaml.cr` (entry point, plus
+a check against loading the stdlib's `yaml` next to cryaml), `shim/yaml.cr`
+(lets unmodified `require "yaml"` code use cryaml) and
+`src/cryaml/{big,uri,uuid}.cr` (the stdlib's `big/yaml`, `uri/yaml` and
+`uuid/yaml` `require "yaml"`).
+
+`scripts/stdlib_drift.cr` fails when a file cryaml replaces changes upstream
+or the stdlib's `yaml.cr` starts loading a file `src/yaml.cr` doesn't.
 
 ## Testing
 
 ```mermaid
 flowchart LR
-    Corpus["yaml-test-suite (402)<br>edge cases (110)<br>real-world samples (12)<br>+ truncated variants"] --> Dump
-    Dump["spec/support/dump.cr<br>events, nodes, Any, emit, dump, build"] --> C["cryaml, in process"]
-    Dump --> O["oracle binary<br>stdlib YAML on libyaml 0.2.5"]
+    Corpus["yaml-test-suite (402)<br>edge cases (121)<br>real-world samples (12)<br>truncations, Builder scripts"] --> Dump
+    Dump["spec/support/dump.cr<br>events, nodes, Any, emit, dump, build"] --> C["cryaml"]
+    Dump --> O["oracle: stdlib YAML<br>on libyaml 0.2.5"]
+    O --> G["spec/fixtures/golden"]
     C --> Cmp{"identical?"}
-    O --> Cmp
+    G --> Cmp
 ```
 
-- `spec/differential_spec.cr` runs every corpus file through both
-  implementations in six modes: pull events (from a `String` and from a
-  chunked `IO`), `YAML.parse_all`, `YAML::Nodes.parse_all`, re-emitting the
-  events through `Builder`, and `to_yaml` round trips, plus three truncations
-  of every test-suite file to exercise error paths. Positions, styles, tags,
-  anchors, values and error messages must match exactly.
-- `spec/builder_differential_spec.cr` generates 400 random, seeded `Builder`
-  call sequences (every scalar style, block and flow collections, anchors,
-  tags, awkward strings) plus invalid ones, and compares the emitted text and
-  errors.
-- `spec/std/` is the stdlib's own YAML spec suite, run against cryaml.
-- `spec/security_spec.cr` covers deep nesting, alias bombs, multi-megabyte
-  scalars, long lines and malformed encodings. `spec/roundtrip_spec.cr` checks
-  that parse, dump, parse is stable on the whole corpus.
-
-The oracle needs libyaml installed; it is a test dependency only.
+- **Differential specs.** `spec/differential_spec.cr` runs every corpus file
+  in six modes: pull events (from a `String` and from a chunked `IO`),
+  `YAML.parse_all`, `YAML::Nodes.parse_all`, re-emitting the events through
+  `Builder`, and `to_yaml` round trips, plus three truncations of every
+  test-suite file. `spec/builder_differential_spec.cr` covers 3,805 `Builder`
+  scripts: 400 random ones, every value x scalar style x position, invalid
+  sequences and byte strings libyaml accepts. Expected output is recorded in
+  `spec/fixtures/golden` from libyaml 0.2.5, so these specs run on every
+  platform; `CRYAML_ORACLE=1` compares with the live oracle instead (CI does
+  on Linux and macOS) and checks the recordings are current,
+  `CRYAML_ORACLE=update` rewrites them. The oracle refuses any libyaml but
+  0.2.5: Crystal's own macOS build links an older one, which differs.
+- **Fuzzing.** `fuzz/fuzz.cr` mutates the corpus and generates `Builder`
+  scripts, runs both implementations as separate processes (so crashes and
+  hangs on either side are caught) and minimizes every difference. A nightly
+  workflow runs four shards.
+- **Upstream specs.** `spec/std/` holds Crystal 1.21.0's YAML specs; CI also
+  runs `spec/std/yaml` of the latest release and of nightly against cryaml.
+- **Downstream.** CI runs the test suites of shards, ameba and crystal-i18n
+  on cryaml through the shim.
+- **Coverage.** `scripts/coverage.sh` (kcov) enforces per-file floors: what
+  the suite doesn't reach is unreachable through the public API (emitter
+  directives and canonical mode, defensive buffer growth).
+- **Hostile input and round trips.** `spec/security_spec.cr` covers deep
+  nesting, alias bombs, multi-megabyte scalars, long lines and malformed
+  encodings; `spec/roundtrip_spec.cr` checks that parse, dump, parse is
+  stable on the whole corpus.
+- **Platforms.** CI runs everything on Linux x86_64/aarch64, macOS
+  arm64/x86_64, Windows MSVC and MinGW-w64, Alpine (static musl binary) and
+  in the interpreter. wasm32-wasi has no exceptions, so there CI diffs the
+  dumps of every input that parses without error against the native run.

@@ -148,7 +148,7 @@ jobs:
         run: |
           wasmtime run --dir "$PWD::$PWD" smoke.wasm dump "$PWD/files.txt" > wasm.txt
           cmp native.txt wasm.txt
-
+          wasmtime run --dir "$PWD" smoke.wasm dump "$PWD/files.txt" > wasm.txt
   interpreter:
     name: spec (interpreter)
     runs-on: ubuntu-24.04
