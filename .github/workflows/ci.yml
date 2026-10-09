@@ -308,3 +308,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: fsfe/reuse-action@v5
+
+  # Engine memory safety: specs and fuzzer-generated inputs under valgrind
+  # with -Dgc_none (plain malloc, so out-of-bounds access is visible).
+  memcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: FUZZ_CASES=10000 scripts/memcheck.sh .cache/memcheck

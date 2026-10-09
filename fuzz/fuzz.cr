@@ -201,25 +201,21 @@ seconds = 60
 seed = Random.new.rand(UInt32::MAX).to_u64
 batch = 2000
 out_dir = File.join(Fuzz::ROOT, "fuzz", "findings")
+bundle_path = nil
 OptionParser.parse do |parser|
   parser.on("--seconds N", "How long to run") { |v| seconds = v.to_i }
   parser.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   parser.on("--batch N", "Cases per server run") { |v| batch = v.to_i }
   parser.on("--out DIR", "Where to write findings") { |v| out_dir = v }
+  parser.on("--bundle PATH", "Only write one batch of cases to PATH (oracle bundle format) and exit") { |v| bundle_path = v }
 end
 
-Fuzz.libyaml_server = Differential.oracle_binary(release: true)
-Fuzz.cryaml_server = Differential.oracle_binary(cryaml: true, release: true)
 rng = Random.new(seed)
 seeds = Fuzz.seeds
 modes = %w(events events events events_io any_all nodes emit dump)
-deadline = Time.instant + seconds.seconds
-found = Set(String).new
-total = 0
-STDERR.puts "fuzz: seed=#{seed} seeds=#{seeds.size} batch=#{batch} seconds=#{seconds}"
 
-while Time.instant < deadline
-  cases = Array(Differential::Case).new(batch) do |i|
+generate = -> do
+  Array(Differential::Case).new(batch) do |i|
     if rng.rand(8) == 0
       Differential::Case.new("b#{i}", "build", Fuzz.build_script(rng))
     else
@@ -227,6 +223,23 @@ while Time.instant < deadline
       Differential::Case.new("c#{i}", modes.sample(rng), input)
     end
   end
+end
+
+if path = bundle_path
+  cases = generate.call
+  File.write(path, cases.map { |c| {name: Differential.key(c), mode: c.mode, input: Base64.strict_encode(c.input)} }.to_json)
+  exit
+end
+
+Fuzz.libyaml_server = Differential.oracle_binary(release: true)
+Fuzz.cryaml_server = Differential.oracle_binary(cryaml: true, release: true)
+deadline = Time.instant + seconds.seconds
+found = Set(String).new
+total = 0
+STDERR.puts "fuzz: seed=#{seed} seeds=#{seeds.size} batch=#{batch} seconds=#{seconds}"
+
+while Time.instant < deadline
+  cases = generate.call
   Fuzz.compare(cases).each do |finding|
     id = Fuzz.save(out_dir, Fuzz.minimize(finding))
     if found.add?(id)
