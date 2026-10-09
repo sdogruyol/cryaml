@@ -1,18 +1,21 @@
-# Cross-target check for targets without exception support (wasm32-wasi):
-# run the same dumps natively and on the target and diff the output.
+# Cross-target check for targets without exception support or file access
+# (wasm32-wasi): run the same dumps natively and on the target, then diff.
 #
-#   crystal run spec/support/target_smoke.cr -- list  > files.txt   # native: inputs that parse without error
-#   crystal run spec/support/target_smoke.cr -- dump files.txt       # native and on the target; outputs must match
+#   crystal run spec/support/target_smoke.cr -- bundle > bundle.txt  # native
+#   ./smoke dump < bundle.txt > native.txt                            # native
+#   wasmtime run smoke.wasm dump < bundle.txt > wasm.txt              # target
 #
-# `list` needs exceptions, so it only runs natively; `dump` only gets inputs
-# that don't raise.
+# `bundle` writes every corpus input that parses without error (finding them
+# needs exceptions, so it only runs natively) as "== path" plus a base64
+# line. `dump` reads that from STDIN, since WASI builds can't open files.
+require "base64"
 require "../../src/cryaml"
 require "./dump"
 
 ROOT = File.expand_path("../..", __DIR__)
 
 case ARGV[0]?
-when "list"
+when "bundle"
   paths = Dir.glob(File.join(ROOT, "spec", "fixtures", "{yaml-test-suite,edge}", "*.yaml")) +
           Dir.glob(File.join(ROOT, "samples", "*.{yaml,yml}"))
   paths.sort.each do |path|
@@ -20,15 +23,16 @@ when "list"
     begin
       YAML.parse_all(input).to_yaml
       YAML::Nodes.parse_all(input)
-      puts Path[path].relative_to(ROOT)
     rescue
-      # raises: not usable on targets without exceptions
+      next # raises: not usable on targets without exceptions
     end
+    puts "== #{Path[path].relative_to(ROOT)}"
+    puts Base64.strict_encode(input)
   end
 when "dump"
-  File.read_lines(ARGV[1]).each do |relative|
-    input = File.read(File.join(ROOT, relative))
-    puts "== #{relative}"
+  while header = STDIN.gets
+    input = String.new(Base64.decode(STDIN.gets.not_nil!))
+    puts header
     io = IO::Memory.new
     CryamlDump.events(io, input)
     CryamlDump.nodes(io, input)
@@ -36,5 +40,5 @@ when "dump"
     puts io
   end
 else
-  abort "usage: target_smoke (list | dump FILES)"
+  abort "usage: target_smoke (bundle | dump)"
 end
