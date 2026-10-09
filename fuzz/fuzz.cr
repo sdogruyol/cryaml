@@ -1,17 +1,18 @@
 # Differential fuzzer: mutates YAML inputs and Builder scripts, runs them
-# through cryaml (in process) and through the stdlib's libyaml 0.2.5 binding
-# (the oracle from spec/support), and records every difference.
+# through cryaml and through the stdlib's libyaml 0.2.5 binding, and records
+# every difference.
 #
 #   crystal build --release fuzz/fuzz.cr -o bin/fuzz
 #   bin/fuzz --seconds 3600 [--seed N] [--batch 2000] [--out fuzz/findings]
 #
-# A finding is a case whose dumps differ, or where cryaml raised something
-# other than YAML::Error, or took more than a second. Each one is minimized
-# and written to the output directory as `<id>.yaml` (input) and
-# `<id>.txt` (mode, both dumps). Exit status 1 if anything was found.
+# Both sides run as dump servers (spec/support/oracle.cr, built with and
+# without -Dcryaml) so a crash or hang on either side is caught instead of
+# taking the fuzzer down. A finding is a case whose dumps differ, or on which
+# only cryaml crashed or hung. Each one is minimized and written to the
+# output directory as `<id>.yaml` (input) and `<id>.txt` (mode, both dumps).
+# Exit status 1 if anything was found.
 #
 # Needs libyaml 0.2.5 for the oracle, like `CRYAML_ORACLE=1`.
-require "../src/cryaml"
 require "../spec/support/differential"
 require "digest/sha1"
 require "option_parser"
@@ -103,7 +104,7 @@ module Fuzz
       if depth > 0 && rng.rand(8) == 0
         lines << "alias a#{rng.rand(3)}"
       else
-        style = YAML::ScalarStyle.values.sample(rng)
+        style = %w(ANY PLAIN SINGLE_QUOTED DOUBLE_QUOTED LITERAL FOLDED).sample(rng)
         value = String.build { |io| (1 + rng.rand(2)).times { io << SCALARS.sample(rng) } }
         lines << "scalar #{style} #{anchor} #{CryamlDump.build_escape(tag)} #{CryamlDump.build_escape(value)}"
       end
@@ -121,38 +122,41 @@ module Fuzz
     end
   end
 
-  # cryaml's dump, or a crash/slowness finding.
-  def self.run_cryaml(mode : String, input : String) : {String, String?}
-    start = Time.instant
-    dump = CryamlDump.run(mode, input)
-    elapsed = Time.instant - start
-    {dump, elapsed > 1.second ? "slow (#{elapsed.total_seconds.round(2)}s)" : nil}
-  rescue ex
-    {"#{ex.class}: #{ex.message}\n#{ex.backtrace?.try(&.first(8).join('\n'))}", "crash"}
-  end
+  CRASHED = "!!crashed or timed out"
 
-  # The oracle's dumps, or nil for cases on which the oracle itself died.
-  def self.oracle(cases : Array(Differential::Case)) : Hash(String, String)
-    Differential.oracle(cases)
-  rescue ex
-    raise ex if ex.message.try(&.starts_with?("the oracle links libyaml"))
-    # The libyaml binding can crash on some inputs; bisect the batch so the
-    # remaining cases still get compared.
-    return {} of String => String if cases.size == 1
+  class_property libyaml_server = ""
+  class_property cryaml_server = ""
+
+  # Dumps of *cases* from *server*. Cases on which the server crashes or
+  # hangs are found by bisection and get `CRASHED`.
+  def self.dumps(server : String, cases : Array(Differential::Case)) : Hash(String, String)
+    timeout = Math.max(10.0, cases.size * 0.05).seconds
+    Differential.run_server(server, cases, timeout)
+  rescue Differential::ServerFailure
+    return {Differential.key(cases[0]) => CRASHED} if cases.size == 1
     half = cases.size // 2
-    oracle(cases[0, half]).merge(oracle(cases[half..]))
+    dumps(server, cases[0, half]).merge(dumps(server, cases[half..]))
   end
 
-  def self.differs?(c : Differential::Case, expected : String?) : Finding?
-    actual, problem = run_cryaml(c.mode, c.input)
-    if problem
-      Finding.new(problem, c.mode, c.input, expected || "(oracle crashed)", actual)
-    elsif expected && expected != actual
-      Finding.new("mismatch", c.mode, c.input, expected, actual)
+  # Compares both sides on *cases*; crashes on both sides count as agreement
+  # (the shared stdlib layers crash on some inputs in both).
+  def self.compare(cases : Array(Differential::Case)) : Array(Finding)
+    expected = dumps(libyaml_server, cases)
+    actual = dumps(cryaml_server, cases)
+    cases.compact_map do |c|
+      key = Differential.key(c)
+      want, got = expected[key], actual[key]
+      next if want == got
+      if got == CRASHED
+        Finding.new("crash", c.mode, c.input, want, got)
+      elsif want != CRASHED
+        Finding.new("mismatch", c.mode, c.input, want, got)
+      end
     end
   end
 
-  # Delta debugging: repeatedly drop chunks while the case still differs.
+  # Delta debugging: repeatedly drop chunks while the case still fails the
+  # same way.
   def self.minimize(finding : Finding) : Finding
     best = finding
     chunk = Math.max(best.input.bytesize // 2, 1)
@@ -165,10 +169,7 @@ module Fuzz
         tail.copy_to(rest[start..]) unless tail.empty?
         Differential::Case.new("min-#{start}", best.mode, String.new(rest))
       end.to_a
-      expected = oracle(candidates)
-      smaller = candidates.compact_map { |c| expected[Differential.key(c)]?.try { |e| differs?(c, e) } }
-        .select { |f| f.kind == best.kind || best.kind == "mismatch" && f.kind == "mismatch" }
-        .min_by?(&.input.bytesize)
+      smaller = compare(candidates).select(&.kind.==(best.kind)).min_by?(&.input.bytesize)
       if smaller && smaller.input.bytesize < best.input.bytesize
         best = smaller
         chunk = Math.max(best.input.bytesize // 2, 1)
@@ -181,7 +182,7 @@ module Fuzz
 
   def self.save(dir : String, finding : Finding) : String
     Dir.mkdir_p(dir)
-    id = "#{finding.kind.split.first}-#{finding.mode}-#{Digest::SHA1.hexdigest(finding.input)[0, 12]}"
+    id = "#{finding.kind}-#{finding.mode}-#{Digest::SHA1.hexdigest(finding.input)[0, 12]}"
     File.write(File.join(dir, "#{id}.yaml"), finding.input)
     File.write(File.join(dir, "#{id}.txt"), <<-TXT)
       kind: #{finding.kind}
@@ -203,17 +204,18 @@ out_dir = File.join(Fuzz::ROOT, "fuzz", "findings")
 OptionParser.parse do |parser|
   parser.on("--seconds N", "How long to run") { |v| seconds = v.to_i }
   parser.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
-  parser.on("--batch N", "Cases per oracle run") { |v| batch = v.to_i }
+  parser.on("--batch N", "Cases per server run") { |v| batch = v.to_i }
   parser.on("--out DIR", "Where to write findings") { |v| out_dir = v }
 end
 
+Fuzz.libyaml_server = Differential.oracle_binary(release: true)
+Fuzz.cryaml_server = Differential.oracle_binary(cryaml: true, release: true)
 rng = Random.new(seed)
 seeds = Fuzz.seeds
 modes = %w(events events events events_io any_all nodes emit)
 deadline = Time.instant + seconds.seconds
 found = Set(String).new
 total = 0
-compared = 0
 STDERR.puts "fuzz: seed=#{seed} seeds=#{seeds.size} batch=#{batch} seconds=#{seconds}"
 
 while Time.instant < deadline
@@ -225,21 +227,14 @@ while Time.instant < deadline
       Differential::Case.new("c#{i}", modes.sample(rng), input)
     end
   end
-  expected = Fuzz.oracle(cases)
-  compared += expected.size
-  cases.each do |c|
-    next unless finding = Fuzz.differs?(c, expected[Differential.key(c)]?)
-    # Build scripts from the generator can make libyaml abort; only keep
-    # cryaml crashes for cases the oracle survived.
-    next if finding.expected == "(oracle crashed)" && finding.kind != "crash"
-    finding = Fuzz.minimize(finding) unless finding.kind.starts_with?("slow")
-    id = Fuzz.save(out_dir, finding)
+  Fuzz.compare(cases).each do |finding|
+    id = Fuzz.save(out_dir, Fuzz.minimize(finding))
     if found.add?(id)
       STDERR.puts "fuzz: #{finding.kind} #{finding.mode} #{finding.input.inspect[0, 120]} -> #{id}"
     end
   end
   total += cases.size
-  STDERR.puts "fuzz: #{total} cases, #{compared} compared with libyaml, #{found.size} findings"
+  STDERR.puts "fuzz: #{total} cases, #{found.size} findings"
 end
 
 exit(found.empty? ? 0 : 1)

@@ -1,12 +1,20 @@
-# Reference implementation for differential tests: the stdlib's libyaml
-# binding. Test-only; cryaml itself never links libyaml.
+# Dump server for differential tests and the fuzzer.
+#
+# Built normally it is the reference: the stdlib's libyaml binding
+# (test-only; cryaml itself never links libyaml). Built with `-Dcryaml` it
+# runs the same dumps on cryaml, which lets the fuzzer survive crashes and
+# hangs on either side.
 #
 # Usage: oracle BUNDLE.json
 #   BUNDLE.json: [{"name": ..., "mode": ..., "input": BASE64}, ...]
 # Prints a JSON object mapping each name to the dump of its case, plus
 # "__libyaml_version__" (the harness refuses anything but 0.2.5).
 require "json"
-require "yaml"
+{% if flag?(:cryaml) %}
+  require "../../src/cryaml"
+{% else %}
+  require "yaml"
+{% end %}
 require "base64"
 require "./dump"
 
