@@ -253,3 +253,37 @@ jobs:
         with:
           name: coverage-report
           path: .cache/coverage/report
+
+  # Unmodified projects that use YAML, built on cryaml through the shim.
+  downstream:
+    name: downstream (${{ matrix.repo }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { repo: crystal-lang/shards, specs: spec/unit }
+          - { repo: crystal-ameba/ameba, specs: spec }
+          - { repo: crystal-i18n/i18n, specs: spec }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - run: sudo apt-get update && sudo apt-get install -y fossil mercurial
+      - name: Test ${{ matrix.repo }} on cryaml
+        env:
+          REPO: ${{ matrix.repo }}
+          SPECS: ${{ matrix.specs }}
+        run: |
+          git clone --depth 1 "https://github.com/$REPO.git" /tmp/project
+          cryaml="$PWD"
+          cd /tmp/project
+          shards install --ignore-crystal-version
+          ln -s "$cryaml" lib/cryaml
+          export CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)"
+          crystal build $(find spec -name '*_spec.cr') -o /tmp/specs
+          if ldd /tmp/specs | grep -i yaml; then echo "linked libyaml" >&2; exit 1; fi
+          crystal spec $SPECS
