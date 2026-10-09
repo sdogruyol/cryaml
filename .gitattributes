@@ -1,0 +1,10 @@
+# Sources use LF everywhere, including Windows checkouts (heredocs in specs
+# depend on it).
+* text=auto eol=lf
+
+# Test inputs are byte-exact (CRLF, CR, BOM, UTF-16, invalid UTF-8 cases):
+# never convert them.
+spec/fixtures/** -text
+samples/** -text
+
+spec/fixtures/golden/*.json linguist-generated=true

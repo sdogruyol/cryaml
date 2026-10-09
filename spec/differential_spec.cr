@@ -36,5 +36,5 @@ describe "differential (cryaml vs libyaml)" do
       cases << Differential::Case.new(cut_name, "events", cut)
     end
   end
-  Differential.compare(cases)
+  Differential.compare("corpus", cases)
 end

@@ -93,5 +93,5 @@ describe "builder differential (cryaml vs libyaml)" do
   BuildScripts::INVALID.each_with_index do |script, i|
     cases << Differential::Case.new("invalid-#{i}", "build", script)
   end
-  Differential.compare(cases)
+  Differential.compare("builder", cases)
 end
