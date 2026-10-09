@@ -102,8 +102,12 @@ The hot loops keep libyaml's structure but do less per character:
   input takes about a second.
 - **Malformed UTF-8 in `Builder`.** libyaml's event constructors reject it;
   the binding ignored the failure and re-emitted the previous event (which can
-  end in `free(): double free detected`). cryaml raises
-  `YAML::Error("Error emitting scalar: invalid UTF-8 string")`.
+  end in `free(): double free detected`, or in an unrelated error). cryaml
+  raises `YAML::Error("Error emitting scalar: invalid UTF-8 string")`. Besides
+  invalid strings passed by the program, this happens when re-emitting a
+  parsed node whose tag's `%`-escapes decode to an overlong sequence
+  (`!<tag:%C0%A9>`): both scanners accept that tag, as libyaml only checks
+  escaped octets for structure. The fuzzer found it.
 - **No `finalize`.** `PullParser` and `Builder` hold no native memory, so they
   no longer define finalizers; `close` is a no-op.
 
