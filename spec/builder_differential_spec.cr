@@ -82,6 +82,21 @@ private module BuildScripts
     "stream_start\ndoc_start implicit\nscalar PLAIN - - a\ndoc_end\ndoc_start implicit\nscalar FOLDED - - \\n\ndoc_end\nstream_end",
     "stream_start\ndoc_start implicit\nscalar ANY - - a\nstream_end",
   ]
+
+  # Byte strings libyaml's `yaml_check_utf8` accepts although they are not
+  # valid UTF-8 for Crystal: encoded surrogates and code points above
+  # U+10FFFF. The emitter writes them as escapes.
+  ODD_BYTES = ["a\\x{ed}\\x{a0}\\x{80}b", "\\x{f4}\\x{90}\\x{80}\\x{80}", "\\x{f7}\\x{bf}\\x{bf}\\x{bf}",
+               "\\x{f5}\\x{80}\\x{80}\\x{80}", "\\x{ed}\\x{bf}\\x{bf}"]
+
+  def self.odd_byte_scripts : Array(String)
+    ODD_BYTES.flat_map do |value|
+      ["ANY", "PLAIN", "DOUBLE_QUOTED", "SINGLE_QUOTED", "LITERAL"].map do |style|
+        "stream_start\ndoc_start implicit\nmap_start BLOCK - -\nscalar #{style} - - #{value}\n" \
+        "scalar #{style} - !a#{value} #{value}\nmap_end\ndoc_end\nstream_end"
+      end
+    end
+  end
 end
 
 describe "builder differential (cryaml vs libyaml)" do
@@ -92,6 +107,9 @@ describe "builder differential (cryaml vs libyaml)" do
   end
   BuildScripts::INVALID.each_with_index do |script, i|
     cases << Differential::Case.new("invalid-#{i}", "build", script)
+  end
+  BuildScripts.odd_byte_scripts.each_with_index do |script, i|
+    cases << Differential::Case.new("odd-bytes-#{i}", "build", script)
   end
   Differential.compare("builder", cases)
 end

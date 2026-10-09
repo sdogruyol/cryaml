@@ -25,6 +25,10 @@ module CryamlDump
         io << "!ParseException " << ex.message << " @" << ex.line_number << ':' << ex.column_number << '\n'
       rescue ex : YAML::Error
         io << "!" << ex.class << ' ' << ex.message << '\n'
+      rescue ex
+        # Non-YAML errors raised by the shared upper layers (for example
+        # Time::Format::Error from the core schema) must match too.
+        io << "!" << ex.class << ' ' << ex.message << '\n'
       end
     end.scrub
   end
@@ -164,57 +168,67 @@ module CryamlDump
     end
   end
 
-  # Escapes *string* as one space-free script field.
+  # Escapes *string* as one space-free script field. Bytes that aren't valid
+  # UTF-8 become `\x{HH}`, so scripts can carry any byte string.
   def self.build_escape(string : String) : String
     return %("") if string.empty?
     String.build do |str|
-      string.each_char do |char|
-        case char
-        when ' '  then str << "\\s"
-        when '\n' then str << "\\n"
-        when '\t' then str << "\\t"
-        when '\r' then str << "\\r"
-        when '\\' then str << "\\\\"
+      reader = Char::Reader.new(string)
+      while reader.has_next?
+        char = reader.current_char
+        if reader.error
+          string.to_slice[reader.pos, reader.current_char_width].each do |byte|
+            str << "\\x{" << byte.to_s(16) << '}'
+          end
         else
-          if char.ord < 0x20 || char.ord == 0x7F || char == '"'
-            str << "\\u{" << char.ord.to_s(16) << '}'
+          case char
+          when ' '  then str << "\\s"
+          when '\n' then str << "\\n"
+          when '\t' then str << "\\t"
+          when '\r' then str << "\\r"
+          when '\\' then str << "\\\\"
           else
-            str << char
+            if char.ord < 0x20 || char.ord == 0x7F || char == '"'
+              str << "\\u{" << char.ord.to_s(16) << '}'
+            else
+              str << char
+            end
           end
         end
+        reader.next_char
       end
     end
   end
 
   def self.build_unescape(field : String) : String
     return "" if field == %("")
-    String.build do |str|
-      reader = Char::Reader.new(field)
-      while reader.has_next?
-        char = reader.current_char
-        if char == '\\'
-          case escape = reader.next_char
-          when 's' then str << ' '
-          when 'n' then str << '\n'
-          when 't' then str << '\t'
-          when 'r' then str << '\r'
-          when 'u'
-            reader.next_char # {
-            hex = String.build do |h|
-              until reader.peek_next_char == '}'
-                h << reader.next_char
-              end
-              reader.next_char
+    io = IO::Memory.new
+    reader = Char::Reader.new(field)
+    while reader.has_next?
+      char = reader.current_char
+      if char == '\\'
+        case escape = reader.next_char
+        when 's' then io << ' '
+        when 'n' then io << '\n'
+        when 't' then io << '\t'
+        when 'r' then io << '\r'
+        when 'u', 'x'
+          reader.next_char # {
+          hex = String.build do |h|
+            until reader.peek_next_char == '}'
+              h << reader.next_char
             end
-            str << hex.to_i(16).chr
-          else str << escape
+            reader.next_char
           end
-        else
-          str << char
+          escape == 'u' ? io << hex.to_i(16).chr : io.write_byte(hex.to_u8(16))
+        else io << escape
         end
-        reader.next_char
+      else
+        io << char
       end
+      reader.next_char
     end
+    String.new(io.to_slice)
   end
 
   private def self.build_field(field : String) : String?

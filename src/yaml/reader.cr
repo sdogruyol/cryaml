@@ -56,7 +56,8 @@ class YAML::Reader
     in String
       # A small document never needs the full-size buffer: one raw chunk is
       # at most the whole string, and decoding grows by at most 3/2.
-      @buffer = Bytes.new(Math.min(BUFFER_SIZE, input.bytesize * 2 + 64) + PADDING)
+      size = input.bytesize < BUFFER_SIZE // 2 ? input.bytesize * 2 + 64 : BUFFER_SIZE
+      @buffer = Bytes.new(size + PADDING)
       @input_string = input
       @raw = input.to_unsafe
       @string_size = input.bytesize

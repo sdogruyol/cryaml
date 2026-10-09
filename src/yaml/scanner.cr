@@ -709,7 +709,14 @@ class YAML::Scanner < YAML::Reader
         start_mark, "did not find expected tag URI")
     end
 
-    string.to_s
+    # libyaml returns the URI as a C string, so a `%00` escape ends it there
+    # for every later consumer (the '!' special case, %TAG prefixes, joining
+    # prefix and suffix).
+    bytes = string.to_slice
+    if index = bytes.index(0_u8)
+      bytes = bytes[0, index]
+    end
+    String.new(bytes)
   end
 
   # yaml_parser_scan_uri_escapes

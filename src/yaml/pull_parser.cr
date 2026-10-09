@@ -68,9 +68,7 @@ class YAML::PullParser
   def tag : String?
     case kind
     when .mapping_start?, .sequence_start?, .scalar?
-      # libyaml hands tags over as C strings, so they end at the first NUL
-      # (a tag can contain one through a `%00` escape).
-      @event.tag.try { |tag| c_string(tag) }
+      @event.tag
     else
       # no tag
     end
@@ -301,15 +299,6 @@ class YAML::PullParser
       when .scalar?, .sequence_start?, .mapping_start?, .alias?
         @event.anchor
       end
-  end
-
-  # libyaml passes strings such as tags around NUL-terminated.
-  private def c_string(string : String) : String
-    if index = string.byte_index(0_u8)
-      string.byte_slice(0, index)
-    else
-      string
-    end
   end
 
   def raise(msg : String, line_number = self.start_line, column_number = self.start_column, context_info = nil) : NoReturn

@@ -193,10 +193,10 @@ class YAML::Builder
   end
 
   private def emit(event_name : String, event : Event) : Nil
-    # libyaml's event constructors reject invalid UTF-8 (`yaml_check_utf8`).
+    # libyaml's event constructors reject malformed UTF-8 (`yaml_check_utf8`).
     # The libyaml binding ignored that failure and re-emitted a stale event,
     # which could crash the process; report it instead.
-    unless utf8?(event.anchor) && utf8?(event.tag) && event.value.valid_encoding?
+    unless utf8?(event.anchor) && utf8?(event.tag) && utf8?(event.value)
       raise YAML::Error.new("Error emitting #{event_name}: invalid UTF-8 string")
     end
 
@@ -205,8 +205,28 @@ class YAML::Builder
     end
   end
 
+  # libyaml `yaml_check_utf8`: well-formed sequences without overlong forms.
+  # Unlike `String#valid_encoding?` it accepts encoded surrogates and code
+  # points above U+10FFFF, which the emitter writes as escapes.
   private def utf8?(string : String?) : Bool
-    string.nil? || string.valid_encoding?
+    return true unless string
+    bytes = string.to_slice
+    i = 0
+    while i < bytes.size
+      octet = bytes[i]
+      width = Chars.width(bytes.to_unsafe, i)
+      return false if width == 0 || i + width > bytes.size
+      value = (width == 1 ? octet & 0x7F : width == 2 ? octet & 0x1F : width == 3 ? octet & 0x0F : octet & 0x07).to_u32
+      (1...width).each do |k|
+        octet = bytes[i + k]
+        return false if octet & 0xC0 != 0x80
+        value = (value << 6) + (octet & 0x3F)
+      end
+      return false unless width == 1 || (width == 2 && value >= 0x80) ||
+                          (width == 3 && value >= 0x800) || (width == 4 && value >= 0x10000)
+      i += width
+    end
+    true
   end
 
   private def increase_nesting

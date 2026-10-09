@@ -95,11 +95,14 @@ class YAML::Emitter
     false
   end
 
-  # yaml_emitter_flush (writer.c)
+  # yaml_emitter_flush (writer.c). Like libyaml, the buffer is reset before
+  # writing, so an IO that raises drops the bytes instead of having them
+  # written again by the next flush.
   def flush : Bool
     if @pos > 0
-      @io.write_string(@buffer[0, @pos])
+      size = @pos
       @pos = 0
+      @io.write_string(@buffer[0, size])
     end
     true
   end
@@ -480,7 +483,7 @@ class YAML::Emitter
 
   # yaml_emitter_check_simple_key
   private def check_simple_key? : Bool
-    length = 0
+    length = 0_i64
     case @events.first.kind
     when .alias?
       length += @anchor_length
