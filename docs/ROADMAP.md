@@ -45,6 +45,24 @@ flowchart LR
   - **`YAML.libyaml_version`.** Returns 0.2.5 now; deprecate.
 - Maintainer for the engine (tracks libyaml upstream fixes).
 
+Findings from Phase 0 worth raising with core, independent of cryaml:
+
+- **libyaml differs by platform today.** Crystal 1.21.0's macOS tarball
+  links libyaml 0.1.6 by default; Linux distros and Homebrew ship 0.2.5.
+  In the first macOS CI run, comparing against the default-linked 0.1.6
+  failed 534 of 5,561 examples (error text, `%YAML 1.2`, `:` in flow plain
+  scalars, emitter output such as `--- \n...` for empty documents), so stdlib
+  YAML already behaves differently on macOS.
+- **Recursion in the YAML layers.** `YAML::Parser` (behind `YAML.parse`,
+  `Nodes.parse`, `from_yaml`) recurses once per nesting level.
+  `PullParser#max_nesting` (512) keeps native stacks safe, but on wasm32 the
+  default 64 KiB stack has no guard page and overflows at about 40 levels,
+  silently corrupting the heap. Making the tree builder iterative would fix
+  it for every target.
+- **`YAML::Any#hash` on self-referencing aliases** overflowed the stack in
+  1.21.0 (fixed in 1.21.1); the fuzzer hit it within minutes, which argues
+  for running it upstream.
+
 ## Phase 2: stdlib PRs
 
 1. The engine alone, unused, with its unit and differential specs (golden

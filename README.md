@@ -118,6 +118,12 @@ dependencies:
 Run `shards install`. Crystal 1.21 or newer. libyaml does not need to be
 installed.
 
+On wasm32-wasi, link with a larger stack (for example
+`--link-flags="-z stack-size=8388608"`): the default is 64 KiB without a
+guard page, and `YAML.parse` recurses once per nesting level, so a document
+about 40 levels deep overflows it and corrupts the heap. The same holds for
+the stdlib's YAML; cryaml's engine itself doesn't recurse.
+
 ## Usage
 
 Everything in the [stdlib YAML docs](https://crystal-lang.org/api/YAML.html)
