@@ -27,7 +27,7 @@ describe "differential (cryaml vs libyaml)" do
 
   cases = [] of Differential::Case
   (test_suite + samples + edge).each do |name, input|
-    %w(events events_io any_all nodes).each do |mode|
+    %w(events events_io any_all nodes emit dump).each do |mode|
       cases << Differential::Case.new(name, mode, input)
     end
   end
