@@ -32,7 +32,7 @@ jobs:
         with:
           crystal: "1.21.0"
       - run: sudo apt-get update && sudo apt-get install -y libyaml-dev
-      - run: crystal build --release --no-debug fuzz/fuzz.cr -o bin/fuzz
+      - run: mkdir -p bin && crystal build --release --no-debug fuzz/fuzz.cr -o bin/fuzz
       - name: Fuzz
         env:
           SECONDS_TO_RUN: ${{ inputs.seconds || '3000' }}
