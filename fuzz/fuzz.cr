@@ -165,13 +165,25 @@ module Fuzz
     cases.compact_map do |c|
       key = Differential.key(c)
       want, got = expected[key], actual[key]
-      next if want == got
+      next if want == got || known_divergence?(want, got)
       if got == CRASHED
         Finding.new("crash", c.mode, c.input, want, got)
       elsif want != CRASHED
         Finding.new("mismatch", c.mode, c.input, want, got)
       end
     end
+  end
+
+  # Malformed UTF-8 reaching `Builder` (for example a tag whose `%`-escapes
+  # decode to an overlong sequence, re-emitted by the `emit` mode): libyaml's
+  # event constructor rejects it, the binding ignores that and re-emits a
+  # stale event, so its output is undefined; cryaml raises a YAML::Error
+  # (documented in docs/ARCHITECTURE.md). Accept that when everything before
+  # the error is identical.
+  def self.known_divergence?(want : String, got : String) : Bool
+    got_lines = got.lines
+    return false unless got_lines.last?.try(&.ends_with?(": invalid UTF-8 string"))
+    want.lines[0...-1] == got_lines[0...-1]
   end
 
   # Delta debugging: repeatedly drop chunks while the case still fails the

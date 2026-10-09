@@ -30,4 +30,16 @@ describe YAML::Builder do
     builder.flush
     io.written.should be_empty
   end
+
+  # A tag's %-escapes can decode to bytes libyaml's yaml_check_utf8 rejects
+  # (here an overlong sequence). Re-emitting such a node used to send a
+  # stale event through the binding; cryaml reports it.
+  it "raises on a tag that is not valid UTF-8 after %-decoding" do
+    document = YAML::Nodes.parse("!<tag:%C0%A9> v")
+    expect_raises(YAML::Error, "Error emitting scalar: invalid UTF-8 string") do
+      YAML::Builder.build(IO::Memory.new) do |builder|
+        builder.stream { document.to_yaml(builder) }
+      end
+    end
+  end
 end
