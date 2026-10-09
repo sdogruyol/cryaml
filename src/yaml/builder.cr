@@ -213,7 +213,20 @@ class YAML::Builder
     bytes = string.to_slice
     i = 0
     while i < bytes.size
+      # Fast path: eight ASCII bytes at once.
+      if bytes.size - i >= 8
+        word = uninitialized UInt64
+        pointerof(word).as(Pointer(UInt8)).copy_from(bytes.to_unsafe + i, 8)
+        if word & 0x8080808080808080_u64 == 0
+          i += 8
+          next
+        end
+      end
       octet = bytes[i]
+      if octet < 0x80
+        i += 1
+        next
+      end
       width = Chars.width(bytes.to_unsafe, i)
       return false if width == 0 || i + width > bytes.size
       value = (width == 1 ? octet & 0x7F : width == 2 ? octet & 0x1F : width == 3 ? octet & 0x0F : octet & 0x07).to_u32

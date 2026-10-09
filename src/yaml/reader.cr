@@ -160,11 +160,52 @@ class YAML::Reader
   @[AlwaysInline]
   def read(string : ByteBuffer) : Nil
     w = width
-    string.write(pointer, w)
+    if w == 1
+      string << byte
+    else
+      string.write(pointer, w)
+    end
     @pos += w
     @index += 1
     @column += 1
     @unread -= 1
+  end
+
+  # Number of characters at the current position (at most *max*) that are
+  # ASCII, satisfy the block, and can be consumed while *keep* characters
+  # stay decoded.
+  #
+  # Scanner loops of the form `while <cond>; SKIP or READ; CACHE(keep); end`
+  # use it to consume such a run at once: within the run every `CACHE(keep)`
+  # would find the buffer full enough and do nothing, so the buffer is
+  # refilled at exactly the same characters as one at a time.
+  @[AlwaysInline]
+  def ascii_run(keep : Int32, max : Int32 = Int32::MAX, &) : Int32
+    p = pointer
+    limit = Math.min(@unread - keep, max)
+    n = 0
+    while n < limit
+      b = p[n]
+      break unless b < 0x80 && yield b
+      n += 1
+    end
+    n
+  end
+
+  # *count* times `SKIP` over ASCII characters (see `#ascii_run`).
+  @[AlwaysInline]
+  def skip_ascii(count : Int32) : Nil
+    @index += count
+    @column += count
+    @unread -= count
+    @pos += count
+  end
+
+  # *count* times `READ` of ASCII characters (see `#ascii_run`).
+  @[AlwaysInline]
+  def read_ascii(string : ByteBuffer, count : Int32) : Nil
+    string.write(pointer, count)
+    skip_ascii(count)
   end
 
   # libyaml `READ_LINE`: copies a line break into *string* (normalizing CR,
@@ -322,8 +363,27 @@ class YAML::Reader
     out_pos = @last
     unread = @unread
     offset = @offset
+    # Bytes to decode one at a time before trying the word fast path again.
+    slow = 0
 
     while pos < last
+      # Fast path: copy the printable ASCII characters (0x20..0x7E) among
+      # the next eight bytes, up to the first other byte, which is then
+      # decoded below.
+      if slow <= 0 && last - pos >= 8
+        word = uninitialized UInt64
+        pointerof(word).as(Pointer(UInt8)).copy_from(raw + pos, 8)
+        mask = non_printable_ascii_mask(word)
+        good = mask == 0 ? 8 : printable_ascii_prefix(mask)
+        (out + out_pos).copy_from(raw + pos, 8)
+        out_pos += good
+        pos += good
+        offset += good
+        unread += good
+        next if mask == 0
+        slow = 1
+      end
+
       octet = raw[pos]
 
       # Fast path for printable ASCII, tab, LF and CR.
@@ -337,6 +397,7 @@ class YAML::Reader
         pos += 1
         offset += 1
         unread += 1
+        slow -= 1
         next
       end
 
@@ -385,9 +446,33 @@ class YAML::Reader
       pos += width
       offset += width
       unread += 1
+      slow -= width
     end
 
     sync_decode_state(pos, out_pos, unread, offset)
+  end
+
+  # Sets the high bit of the bytes of *word* (eight bytes as loaded from
+  # memory) that are outside 0x20..0x7E: those with the high bit set, those
+  # that reach 0x80 when 1 is added (0x7F), and those that borrow when 0x20
+  # is subtracted (below 0x20). A carry or borrow only leaves a byte that is
+  # itself flagged, so the lowest flagged byte is the first one out of range
+  # and the mask is zero exactly when all eight are in range.
+  @[AlwaysInline]
+  private def non_printable_ascii_mask(word : UInt64) : UInt64
+    (word | (word &+ 0x0101010101010101_u64) | ((word &- 0x2020202020202020_u64) & ~word)) & 0x8080808080808080_u64
+  end
+
+  # Number of bytes before the first one flagged in a nonzero *mask*. Only
+  # little-endian targets load the first byte into the low bits; elsewhere
+  # report none, which just leaves every byte to the slow path.
+  @[AlwaysInline]
+  private def printable_ascii_prefix(mask : UInt64) : Int32
+    if IO::ByteFormat::SystemEndian == IO::ByteFormat::LittleEndian
+      mask.trailing_zeros_count.to_i32 // 8
+    else
+      0
+    end
   end
 
   @[AlwaysInline]

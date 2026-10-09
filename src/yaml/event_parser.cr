@@ -35,8 +35,8 @@ class YAML::EventParser
   DEFAULT_TAG_DIRECTIVES = [{"!", "!"}, {"!!", "tag:yaml.org,2002:"}]
 
   @state = State::STREAM_START
-  @states = [] of State
-  @marks = [] of Mark
+  @states = Stack(State).new
+  @marks = Stack(Mark).new
   @tag_directives = [] of {String, String}
   @error : ParseException? = nil
 
@@ -58,10 +58,12 @@ class YAML::EventParser
     end
   end
 
+  @[AlwaysInline]
   private def peek : Token
     @scanner.peek_token
   end
 
+  @[AlwaysInline]
   private def skip : Nil
     @scanner.skip_token
   end

@@ -11,7 +11,7 @@ class YAML::ByteBuffer
   getter size : Int32 = 0
 
   def initialize(capacity : Int32 = 16)
-    @bytes = Bytes.new(capacity)
+    @bytes = Bytes.new(Math.max(capacity, 16))
     # Highest index written since the last `clear`; everything at or after it
     # is known to be zero.
     @dirty = 0
@@ -84,7 +84,13 @@ class YAML::ByteBuffer
 
   # libyaml `CLEAR`: rewinds and zeroes the storage.
   def clear : Nil
-    @bytes.to_unsafe.clear(@dirty) if @dirty > 0
+    if @dirty > 16
+      @bytes.to_unsafe.clear(@dirty)
+    elsif @dirty > 0
+      # The storage is never smaller than 16 bytes; a constant size clears
+      # without calling `memset`.
+      @bytes.to_unsafe.clear(16)
+    end
     @size = 0
     @dirty = 0
   end
