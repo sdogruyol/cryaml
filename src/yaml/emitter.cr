@@ -934,7 +934,8 @@ class YAML::Emitter
     end
   end
 
-  # FLUSH
+  # FLUSH. Afterwards there is room for at least 5 bytes, so the writes
+  # below advance `@pos` with `&+`: it stays below OUTPUT_BUFFER_SIZE.
   @[AlwaysInline]
   private def flush_if_needed : Nil
     flush unless @pos + 5 < OUTPUT_BUFFER_SIZE
@@ -945,7 +946,7 @@ class YAML::Emitter
   private def put(value : UInt8) : Nil
     flush_if_needed
     @buffer.to_unsafe[@pos] = value
-    @pos += 1
+    @pos &+= 1
     @column += 1
   end
 
@@ -954,22 +955,24 @@ class YAML::Emitter
   private def put_break : Nil
     flush_if_needed
     @buffer.to_unsafe[@pos] = '\n'.ord.to_u8
-    @pos += 1
+    @pos &+= 1
     @column = 0
   end
 
-  # COPY: copies one UTF-8 character from p+i, returns the new index.
+  # COPY: copies one UTF-8 character from p+i, returns the new index. The
+  # character (at most 4 bytes, in the value: the Builder rejects malformed
+  # UTF-8) fits after a FLUSH.
   @[AlwaysInline]
   private def copy(p : Pointer(UInt8), i : Int32) : Int32
     w = Chars.width(p, i)
     buf = @buffer.to_unsafe + @pos
     k = 0
     while k < w
-      buf[k] = p[i + k]
-      k += 1
+      buf[k] = p[i &+ k]
+      k &+= 1
     end
-    @pos += w
-    i + w
+    @pos &+= w
+    i &+ w
   end
 
   # WRITE
