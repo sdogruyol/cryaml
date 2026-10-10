@@ -699,6 +699,15 @@ class YAML::Emitter
       return
     end
 
+    if simple_scalar?(value, length)
+      @multiline = false
+      @flow_plain_allowed = true
+      @block_plain_allowed = true
+      @single_quoted_allowed = true
+      @block_allowed = true
+      return
+    end
+
     s = value
     if (s[0] == '-'.ord && s[1] == '-'.ord && s[2] == '-'.ord) ||
        (s[0] == '.'.ord && s[1] == '.'.ord && s[2] == '.'.ord)
@@ -717,7 +726,7 @@ class YAML::Emitter
       if i != 0
         j = i
         while j != length && plain_ascii?(s[j])
-          j += 1
+          j &+= 1 # below length
         end
         if j != i
           i = j
@@ -844,6 +853,38 @@ class YAML::Emitter
     else
       c < 0x80 && (PLAIN_ASCII_HIGH >> (c & 0x3F)) & 1 != 0
     end
+  end
+
+  # The characters of PLAIN_ASCII that can't start an indicator at the
+  # start of a scalar (or `---` or `...`): all but `!` `"` `%` `&` `'` `*`
+  # `-` `.` `>` `@` `` ` `` `|`.
+  private FIRST_ASCII_LOW  = 0x3BFF8B1000000000_u64
+  private FIRST_ASCII_HIGH = 0x47FFFFFED7FFFFFE_u64
+
+  @[AlwaysInline]
+  private def first_ascii?(c : UInt8) : Bool
+    if c < 0x40
+      (FIRST_ASCII_LOW >> c) & 1 != 0
+    else
+      c < 0x80 && (FIRST_ASCII_HIGH >> (c & 0x3F)) & 1 != 0
+    end
+  end
+
+  # Whether `analyze_scalar` would set no flag for the scalar at *s*
+  # (*length* > 0): its first character is in FIRST_ASCII, the others are in
+  # PLAIN_ASCII or spaces, and it doesn't end in a space. Such spaces set no
+  # flag: no break is next to them, and the indicators that look at them
+  # (`#` after one, `:` before one) are not in PLAIN_ASCII.
+  @[AlwaysInline]
+  private def simple_scalar?(s : Pointer(UInt8), length : Int32) : Bool
+    return false unless first_ascii?(s[0]) && s[length - 1] != ' '.ord
+    i = 1
+    while i < length
+      c = s[i]
+      return false unless c == ' '.ord || plain_ascii?(c)
+      i &+= 1 # below length
+    end
+    true
   end
 
   # yaml_emitter_analyze_event
