@@ -43,7 +43,7 @@ class YAML::Emitter
   private class Failure < Exception
   end
 
-  private DEFAULT_TAG_DIRECTIVES = [{"!", "!"}, {"!!", "tag:yaml.org,2002:"}]
+  private DEFAULT_TAG_DIRECTIVES = { {"!", "!"}, {"!!", "tag:yaml.org,2002:"} }
 
   # Block scalar indentation indicators, indexed by `@best_indent` (2..9).
   private INDENT_HINTS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
@@ -58,7 +58,10 @@ class YAML::Emitter
   @states = Stack(State).new
   @events = Queue(Event).new
   @indents = Stack(Int32).new
+  # The current document's %TAG directives; the defaults are added by
+  # `#each_tag_directive` once `@default_tag_directives` is set.
   @tag_directives = [] of {String, String}
+  @default_tag_directives = false
   @indent = -1
   @flow_level = 0
   @root_context = false
@@ -208,15 +211,25 @@ class YAML::Emitter
     true
   end
 
-  # yaml_emitter_append_tag_directive
-  private def append_tag_directive(value : {String, String}, allow_duplicates : Bool) : Nil
+  # yaml_emitter_append_tag_directive, for the document's own directives.
+  private def append_tag_directive(value : {String, String}) : Nil
     @tag_directives.each do |directive|
-      if directive[0] == value[0]
-        return if allow_duplicates
-        error("duplicate %TAG directive")
-      end
+      error("duplicate %TAG directive") if directive[0] == value[0]
     end
     @tag_directives << value
+  end
+
+  # The tag directives in effect, in libyaml's order: the document's own,
+  # then the default ones whose handle they don't take (libyaml appends
+  # those to the list with `allow_duplicates`; they aren't stored here, to
+  # save allocating the list for most documents).
+  private def each_tag_directive(& : {String, String} ->) : Nil
+    @tag_directives.each { |directive| yield directive }
+    return unless @default_tag_directives
+    DEFAULT_TAG_DIRECTIVES.each do |default|
+      next if @tag_directives.any? { |directive| directive[0] == default[0] }
+      yield default
+    end
   end
 
   # yaml_emitter_increase_indent
@@ -282,9 +295,9 @@ class YAML::Emitter
       analyze_version_directive(version) if version
       directives.try &.each do |directive|
         analyze_tag_directive(directive)
-        append_tag_directive(directive, false)
+        append_tag_directive(directive)
       end
-      DEFAULT_TAG_DIRECTIVES.each { |directive| append_tag_directive(directive, true) }
+      @default_tag_directives = true
 
       implicit = event.value.implicit?
       implicit = false if !first || @canonical
@@ -358,6 +371,7 @@ class YAML::Emitter
       flush
       @state = State::DOCUMENT_START
       @tag_directives.clear
+      @default_tag_directives = false
       return
     end
     error("expected DOCUMENT-END")
@@ -753,7 +767,7 @@ class YAML::Emitter
     p = tag.to_unsafe
     size = tag.bytesize
     error("tag value must not be empty") if size == 0
-    @tag_directives.each do |(handle, prefix)|
+    each_tag_directive do |(handle, prefix)|
       prefix_length = prefix.bytesize
       if prefix_length < size && prefix.to_unsafe.memcmp(p, prefix_length) == 0
         @tag_handle = handle.to_unsafe
