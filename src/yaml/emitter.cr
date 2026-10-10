@@ -1563,7 +1563,7 @@ class YAML::Emitter
              when   0xA0 then '_'
              when 0x2028 then 'L'
              when 0x2029 then 'P'
-             else              '\0'
+             else             '\0'
              end
     if letter != '\0'
       put(letter.ord.to_u8)
