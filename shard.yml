@@ -8,4 +8,4 @@ authors:
 
 crystal: '>= 1.21.0'
 
-license: MIT
+license: MIT AND Apache-2.0 WITH Swift-exception

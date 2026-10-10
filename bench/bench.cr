@@ -41,9 +41,16 @@ def document_value(input : String) : YAML::Any
 end
 
 # Peak resident set size in KiB (benchmark tooling only; the library itself
-# never calls into C).
+# never calls into C). On Linux, getrusage's ru_maxrss survives execve, so it
+# would report the launching process's peak if that was higher; VmHWM is this
+# process's own.
 def peak_rss_kb : Int64?
-  {% if flag?(:unix) %}
+  {% if flag?(:linux) %}
+    File.each_line("/proc/self/status") do |line|
+      return line.split[1].to_i64 if line.starts_with?("VmHWM:")
+    end
+    nil
+  {% elsif flag?(:unix) %}
     return unless LibC.getrusage(LibC::RUSAGE_SELF, out usage) == 0
     # ru_maxrss is in bytes on macOS, KiB elsewhere.
     {% if flag?(:darwin) %} usage.ru_maxrss.to_i64 // 1024 {% else %} usage.ru_maxrss.to_i64 {% end %}

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `shard.yml` declares `MIT AND Apache-2.0 WITH Swift-exception`: the files
+  adapted from Crystal's stdlib keep their license (see NOTICE.md).
+- The README says which stdlib version `src/yaml.cr`, `PullParser` and
+  `Builder` are adapted from, and how to check a newer compiler for drift.
+
 ## 0.1.1 (2026-10-10)
 
 ### Fixed
@@ -50,8 +57,8 @@ First release: the stdlib `YAML` module on a pure Crystal engine.
 ### Performance
 
 Faster than the libyaml binding on every measured workload on Linux
-x86_64/aarch64 and macOS arm64/x86_64 (`YAML.parse_all` 1.25x-3.09x); see
-docs/PERFORMANCE.md.
+x86_64/aarch64 and macOS arm64/x86_64 but one tie (0.99x)
+(`YAML.parse_all` 1.25x-3.09x); see docs/PERFORMANCE.md.
 
 ### Verification
 

@@ -2,6 +2,7 @@
 # everything except what needs GMP (`big`). Differential specs run in golden
 # mode. (wasm32 has no exceptions; see spec/support/target_smoke.cr.)
 require "./scanner_spec"
+require "./emitter_spec"
 require "./differential_spec"
 require "./builder_differential_spec"
 require "./roundtrip_spec"

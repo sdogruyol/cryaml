@@ -5,10 +5,10 @@ and the benchmarks. Files are unmodified copies.
 
 | File | Kind | Source | License |
 | --- | --- | --- | --- |
-| `ameba-crystal.yml` | linter config | [crystal-lang/crystal](https://github.com/crystal-lang/crystal) `.ameba.yml` @ 1.21.0 | Apache-2.0 |
-| `circleci-crystal.yml` | CI pipeline (anchors, aliases, merge keys) | crystal-lang/crystal `.circleci/config.yml` @ 1.21.0 | Apache-2.0 |
-| `gha-crystal-linux.yml` | GitHub Actions workflow | crystal-lang/crystal `.github/workflows/linux.yml` @ 1.21.0 | Apache-2.0 |
-| `shard-crystal.yml` | shard.yml | crystal-lang/crystal `shard.yml` @ 1.21.0 | Apache-2.0 |
+| `ameba-crystal.yml` | linter config | [crystal-lang/crystal](https://github.com/crystal-lang/crystal) `.ameba.yml` @ 1.21.0 | Apache-2.0 WITH Swift-exception |
+| `circleci-crystal.yml` | CI pipeline (anchors, aliases, merge keys) | crystal-lang/crystal `.circleci/config.yml` @ 1.21.0 | Apache-2.0 WITH Swift-exception |
+| `gha-crystal-linux.yml` | GitHub Actions workflow | crystal-lang/crystal `.github/workflows/linux.yml` @ 1.21.0 | Apache-2.0 WITH Swift-exception |
+| `shard-crystal.yml` | shard.yml | crystal-lang/crystal `shard.yml` @ 1.21.0 | Apache-2.0 WITH Swift-exception |
 | `shard-cryaml.yml` | shard.yml | this repository | MIT |
 | `gha-rust.yml` | GitHub Actions workflow | [actions/starter-workflows](https://github.com/actions/starter-workflows) `ci/rust.yml` | MIT |
 | `compose-wordpress.yaml` | Docker Compose | [docker/awesome-compose](https://github.com/docker/awesome-compose) `wordpress-mysql/compose.yaml` | CC0-1.0 |

@@ -76,15 +76,18 @@ gains the least (0.99x-1.90x).
 | `to_yaml` of helm values | 1.59M | 1.18M | 1.30M |
 | `to_yaml` of flow 200 KB | 81.0M | 72.1M | 70.8M |
 
-The last row is the closest: about 2M of each total is the shared
-`Any#to_yaml` code, and the engines alone are about even (36M vs 37M).
+The last row is the one where cryaml runs more instructions, about 2%. About
+half of each total is the shared `Any#to_yaml` code, which is the same on both
+sides, so the whole difference (about 1.3M here, 2.1M at 0.1.1) is in the
+emitter.
 How the engine got there is in [ARCHITECTURE.md](ARCHITECTURE.md#performance-techniques).
 
 ## Memory
 
-Peak RSS of a fresh process running `YAML.parse_all` five times is about the
-same on both sides (Linux x86_64: 36.8 MB vs 36.9 MB for the 1 MB manifests);
-individual runs move by a few MB depending on when the GC collects.
+Peak RSS of a fresh process running `YAML.parse_all` five times is the same
+on both sides (Linux x86_64, `VmHWM` via `bin/bench-* --rss`: 31.3-31.4 MB on
+both for the 1 MB manifests, three runs each); individual runs can move by a
+few MB depending on when the GC collects.
 
 Crystal heap allocated per `YAML.parse_all` is slightly higher with cryaml
 (Linux x86_64, KB):

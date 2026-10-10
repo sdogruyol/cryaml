@@ -89,8 +89,8 @@ The hot loops keep libyaml's structure but do less per character:
   before a refill or flush would happen, so those still happen at the same
   characters;
 - bounds on the live simple keys make most stale-key checks free;
-- `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call, no
-  clearing of dequeued 88- and 128-byte slots.
+- `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call.
+  Dequeued slots are cleared so their strings can be collected.
 
 ### Deliberate differences from libyaml
 
@@ -169,12 +169,15 @@ flowchart LR
 - **Memory safety.** The engine uses raw pointers in its hot loops.
   `scripts/memcheck.sh` builds with `-Dgc_none` (plain malloc, so
   out-of-bounds access shows up) and runs the spec suite and fuzzer-generated
-  inputs under valgrind's memcheck; CI fails on any error in engine code.
+  inputs under valgrind's memcheck. CI fails on any error not matched by
+  `scripts/memcheck.supp` (known stdlib bugs, each pinned to its stdlib
+  frames), and when either run doesn't complete.
 - **Hostile input and round trips.** `spec/security_spec.cr` covers deep
   nesting, alias bombs, multi-megabyte scalars, long lines and malformed
   encodings; `spec/roundtrip_spec.cr` checks that parse, dump, parse is
   stable on the whole corpus.
 - **Platforms.** CI runs everything on Linux x86_64/aarch64, macOS
-  arm64/x86_64, Windows MSVC and MinGW-w64, Alpine (static musl binary) and
-  in the interpreter. wasm32-wasi has no exceptions, so there CI diffs the
-  dumps of every input that parses without error against the native run.
+  arm64/x86_64, Windows MSVC and MinGW-w64 and Alpine (static musl binary),
+  and everything but the `big` serialization specs (no GMP) in the
+  interpreter. wasm32-wasi has no exceptions, so there CI diffs the dumps of
+  every input that parses without error against the native run.

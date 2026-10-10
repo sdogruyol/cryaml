@@ -30,8 +30,8 @@ doc["a"].as_i # => 1
 ```
 
 Nothing else changes: `YAML.parse`, `YAML::Any`, `YAML::Serializable`,
-`#to_yaml`, `YAML::PullParser`, `YAML::Builder` and `YAML::Nodes` are the
-stdlib's.
+`#to_yaml` and `YAML::Nodes` are the stdlib's own code, and
+`YAML::PullParser` and `YAML::Builder` have the stdlib's API.
 
 ## Demo
 
@@ -102,11 +102,11 @@ ratio check. An 8 MB scalar or a single line with 100,000 flow items parses
 in well under a second (unoptimized spec build). libyaml's simple-key scan is
 quadratic in flow nesting depth; cryaml bounds it without changing the tokens.
 
-**Performance.** Faster than the libyaml binding. Measured on GitHub's
-Linux x86_64/aarch64 and macOS arm64/x86_64 runners: `YAML.parse_all` runs
-1.25x-3.09x as fast as the stdlib's, the raw event walk 1.46x-3.19x, the
-emitter 0.99x-1.90x. Peak RSS is about the same. Full tables and instruction
-counts: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+**Performance.** Faster than the libyaml binding everywhere but one tie.
+Measured on GitHub's Linux x86_64/aarch64 and macOS arm64/x86_64 runners:
+`YAML.parse_all` runs 1.25x-3.09x as fast as the stdlib's, the raw event walk
+1.46x-3.19x, the emitter 0.99x-1.90x. Peak RSS is about the same. Full tables
+and instruction counts: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Installation
 
@@ -118,8 +118,14 @@ dependencies:
     github: sdogruyol/cryaml
 ```
 
-Run `shards install`. Crystal 1.21 or newer. libyaml does not need to be
-installed.
+Run `shards install`. libyaml does not need to be installed.
+
+Crystal 1.21 or newer. cryaml loads the `YAML` layers above the engine from
+your compiler's stdlib, but `src/yaml.cr`, `PullParser` and `Builder` are
+adapted from Crystal 1.21.0. If a later Crystal changes those files or adds
+new ones under `yaml/`, cryaml won't pick that up until a cryaml release
+does. `crystal run lib/cryaml/scripts/stdlib_drift.cr` reports any such
+drift for the compiler in use.
 
 On wasm32-wasi, link with a larger stack (for example
 `--link-flags="-z stack-size=8388608"`): the default is 64 KiB without a
@@ -202,6 +208,9 @@ friends), put cryaml's shim directory first in `CRYSTAL_PATH`. Every
 CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)" crystal build src/app.cr
 ```
 
+On Windows the separator is `;` (PowerShell:
+`$env:CRYSTAL_PATH = "lib/cryaml/shim;$(crystal env CRYSTAL_PATH)"`).
+
 The same trick runs an unmodified project's test suite on cryaml.
 
 ## stdlib vs cryaml
@@ -224,18 +233,21 @@ tested: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Development
 
 ```sh
-crystal spec              # everything; needs libyaml for the differential oracle
+crystal spec              # everything; differential specs use recorded libyaml 0.2.5 output
 crystal spec spec/std     # Crystal's own YAML specs, run against cryaml
 crystal run bench/run.cr  # stdlib vs cryaml benchmark (release builds)
 ```
 
-The differential specs compile `spec/support/oracle.cr` against the stdlib's
-`require "yaml"` and compare its output with cryaml's. That is the only place
+The differential specs compare cryaml's output with libyaml 0.2.5's, recorded
+in `spec/fixtures/golden`. With `CRYAML_ORACLE=1`, `spec/differential_spec.cr`
+and `spec/builder_differential_spec.cr` instead compile
+`spec/support/oracle.cr` against the stdlib's `require "yaml"` and compare
+live (`CRYAML_ORACLE=update` rewrites the recordings). That is the only place
 libyaml is used; the library itself contains no `lib`, `fun` or `LibC` calls,
 and CI checks that a program using it does not link libyaml.
 
 ## License
 
 MIT, see [LICENSE](LICENSE). The engine is derived from libyaml (MIT) and the
-`YAML` layers from the Crystal standard library (Apache-2.0); see
-[NOTICE.md](NOTICE.md).
+`YAML` layers from the Crystal standard library (Apache-2.0 WITH
+Swift-exception); see [NOTICE.md](NOTICE.md).

@@ -182,7 +182,8 @@ class YAML::Builder
   def close : Nil
   end
 
-  # Anchors and tags reach libyaml as C strings, which end at the first NUL.
+  # The libyaml binding passed anchors and tags as C strings, which end at the
+  # first NUL; keep that.
   private def c_string(string : String?) : String?
     return unless string
     if index = string.byte_index(0_u8)
