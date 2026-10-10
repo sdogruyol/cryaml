@@ -6,11 +6,17 @@
   adapted from Crystal's stdlib keep their license (see NOTICE.md).
 - The README says which stdlib version `src/yaml.cr`, `PullParser` and
   `Builder` are adapted from, and how to check a newer compiler for drift.
-- `to_yaml` (`Builder` and the emitter) runs fewer instructions on the
-  benchmark documents: now 0.59x-0.71x the instructions of the libyaml
-  binding (was 0.94x-1.03x). The output buffer starts at 1 KB instead of
-  16 KB, so `to_yaml` of a small document allocates 15 KB less; larger
-  outputs about 1 KB more. A `Builder` allocates 80 bytes less.
+- Faster: `YAML.parse_all` 1.16x-3.81x the libyaml binding's speed (was
+  1.25x-3.09x), the event walk 1.81x-6.02x, `to_yaml` 1.29x-1.87x (was
+  0.99x-1.90x), on Linux x86_64/aarch64 and macOS arm64/x86_64. Every
+  benchmark row now runs 17-71% of libyaml's instructions.
+- `to_yaml` of a small document allocates 15 KB less: the output buffer
+  starts at 1 KB and grows to 16 KB only when needed (flushes unchanged).
+- Parsing allocates about the same as the binding (UTF-8 `String` input is
+  validated in place instead of being copied).
+- Inlining tuned for compile time: release builds of a small program using
+  YAML take about 1.7 s longer than with the binding (was about 2.3 s), and
+  the stripped binary is about the binding's plus libyaml.so.
 
 ## 0.1.1 (2026-10-10)
 

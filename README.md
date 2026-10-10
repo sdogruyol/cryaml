@@ -102,11 +102,12 @@ ratio check. An 8 MB scalar or a single line with 100,000 flow items parses
 in well under a second (unoptimized spec build). libyaml's simple-key scan is
 quadratic in flow nesting depth; cryaml bounds it without changing the tokens.
 
-**Performance.** Faster than the libyaml binding everywhere but one tie.
-Measured on GitHub's Linux x86_64/aarch64 and macOS arm64/x86_64 runners:
-`YAML.parse_all` runs 1.25x-3.09x as fast as the stdlib's, the raw event walk
-1.46x-3.19x, the emitter 0.99x-1.90x. Peak RSS is about the same. Full tables
-and instruction counts: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+**Performance.** Faster than the libyaml binding on every workload measured
+on GitHub's Linux x86_64/aarch64 and macOS arm64/x86_64 runners:
+`YAML.parse_all` runs 1.16x-3.81x as fast as the stdlib's, the raw event walk
+1.81x-6.02x, `to_yaml` 1.29x-1.87x, with 17-71% of libyaml's instructions.
+Peak RSS is the same. Release builds of programs using YAML take about 1.7 s
+longer to compile. Full tables: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Installation
 
@@ -221,7 +222,7 @@ The same trick runs an unmodified project's test suite on cryaml.
 | System dependency | libyaml (version varies by platform) | none |
 | API | Crystal stdlib | identical (the same layers, loaded from your stdlib) |
 | Parse results, positions, errors, emitted text | libyaml 0.2.5 on most platforms | identical to libyaml 0.2.5 everywhere |
-| `YAML.parse_all` speed | 1x | 1.25x-3.09x |
+| `YAML.parse_all` speed | 1x | 1.16x-3.81x |
 | Peak RSS | baseline | about the same |
 | Malformed UTF-8 given to `Builder` | can crash the process | raises `YAML::Error` |
 | wasm32-wasi | needs libyaml built for WASI | works |

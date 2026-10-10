@@ -16,7 +16,7 @@
 | Deep flow nesting with the limit raised | quadratic in libyaml's simple-key scan | bounded scan, same tokens |
 | Malformed UTF-8 passed to `Builder` | previous event re-emitted; may crash (`double free`) | `YAML::Error` |
 | Memory | malloc'ed parser/emitter state, freed by finalizers | GC objects only, no finalizers |
-| Throughput | baseline | `YAML.parse_all` 1.25x-3.09x, emitter 0.99x-1.90x ([numbers](PERFORMANCE.md)) |
+| Throughput | baseline | `YAML.parse_all` 1.16x-3.81x, `to_yaml` 1.29x-1.87x ([numbers](PERFORMANCE.md)) |
 | Platforms | wherever libyaml is available; not in Crystal's wasm32 libs | anywhere Crystal compiles, wasm32-wasi included |
 | Debugging | C frames in backtraces | Crystal frames all the way down |
 
