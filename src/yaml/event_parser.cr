@@ -1,8 +1,15 @@
+require "./scanner"
+
 # :nodoc:
 #
 # Port of libyaml 0.2.5 parser.c: turns the token stream produced by
 # `YAML::Scanner` into events. Iterative state machine, like libyaml.
-class YAML::EventParser
+#
+# Like libyaml's `yaml_parser_t`, which holds the reader, scanner and parser
+# state in one struct, the parser is one object with the scanner it reads
+# tokens from: a subclass, so every `PEEK_TOKEN` and `SKIP_TOKEN` is a
+# direct call, and one allocation fewer per parser.
+class YAML::EventParser < YAML::Scanner
   # :nodoc:
   # yaml_parser_state_t
   enum State
@@ -45,10 +52,6 @@ class YAML::EventParser
   # every state function.
   getter event = Event.new
 
-  def initialize(input : String | IO)
-    @scanner = Scanner.new(input)
-  end
-
   # yaml_parser_parse: replaces `#event` with the next event. As with
   # libyaml, a failure leaves an empty (NONE) event behind.
   def parse : Nil
@@ -56,7 +59,7 @@ class YAML::EventParser
       @event = Event.new
       raise error
     end
-    if @scanner.stream_end_produced? || @state.end?
+    if stream_end_produced? || @state.end?
       @event = Event.new
       return
     end
@@ -71,17 +74,12 @@ class YAML::EventParser
 
   @[AlwaysInline]
   private def peek : Token
-    @scanner.peek_token
-  end
-
-  @[AlwaysInline]
-  private def skip : Nil
-    @scanner.skip_token
+    peek_token
   end
 
   # yaml_parser_set_parser_error / yaml_parser_set_parser_error_context
   private def error(problem : String, problem_mark : Mark, context : String? = nil, context_mark : Mark = Mark.new) : NoReturn
-    @scanner.syntax_error(problem, problem_mark, context, context_mark)
+    syntax_error(problem, problem_mark, context, context_mark)
   end
 
   # yaml_parser_state_machine
@@ -121,7 +119,7 @@ class YAML::EventParser
       error("did not find expected <stream-start>", token.start_mark)
     end
     @state = State::IMPLICIT_DOCUMENT_START
-    skip
+    skip_token
     @event = Event.new(EventKind::STREAM_START, token.start_mark, token.start_mark)
   end
 
@@ -131,7 +129,7 @@ class YAML::EventParser
 
     unless implicit
       while token.kind.document_end?
-        skip
+        skip_token
         token = peek
       end
     end
@@ -153,12 +151,12 @@ class YAML::EventParser
       @states << State::DOCUMENT_END
       @state = State::DOCUMENT_CONTENT
       end_mark = token.end_mark
-      skip
+      skip_token
       @event = Event.new(EventKind::DOCUMENT_START, start_mark, end_mark,
         version_directive: version_directive, tag_directives: tag_directives, implicit: false)
     else
       @state = State::END
-      skip
+      skip_token
       @event = Event.new(EventKind::STREAM_END, token.start_mark, token.end_mark)
     end
   end
@@ -183,7 +181,7 @@ class YAML::EventParser
     implicit = true
     if token.kind.document_end?
       end_mark = token.end_mark
-      skip
+      skip_token
       implicit = false
     end
     @tag_directives.clear
@@ -197,7 +195,7 @@ class YAML::EventParser
 
     if token.kind.alias?
       @state = @states.pop
-      skip
+      skip_token
       @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
       return
     end
@@ -211,14 +209,14 @@ class YAML::EventParser
     if token.kind.anchor?
       anchor = token.value
       end_mark = token.end_mark
-      skip
+      skip_token
       token = peek
       if token.kind.tag?
         tag_handle = token.handle
         tag_suffix = token.suffix
         tag_mark = token.start_mark
         end_mark = token.end_mark
-        skip
+        skip_token
         token = peek
       end
     elsif token.kind.tag?
@@ -226,12 +224,12 @@ class YAML::EventParser
       tag_suffix = token.suffix
       start_mark = tag_mark = token.start_mark
       end_mark = token.end_mark
-      skip
+      skip_token
       token = peek
       if token.kind.anchor?
         anchor = token.value
         end_mark = token.end_mark
-        skip
+        skip_token
         token = peek
       end
     end
@@ -273,7 +271,7 @@ class YAML::EventParser
         quoted_implicit = true
       end
       @state = @states.pop
-      skip
+      skip_token
       @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
         anchor: anchor, tag: tag, value: token.value,
         plain_implicit: plain_implicit, quoted_implicit: quoted_implicit,
@@ -317,13 +315,13 @@ class YAML::EventParser
     if first
       token = peek
       @marks << token.start_mark
-      skip
+      skip_token
     end
 
     token = peek
     if token.kind.block_entry?
       mark = token.end_mark
-      skip
+      skip_token
       token = peek
       if !token.kind.block_entry? && !token.kind.block_end?
         @states << State::BLOCK_SEQUENCE_ENTRY
@@ -335,7 +333,7 @@ class YAML::EventParser
     elsif token.kind.block_end?
       @state = @states.pop
       @marks.pop
-      skip
+      skip_token
       @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
     else
       error("did not find expected '-' indicator", token.start_mark,
@@ -348,7 +346,7 @@ class YAML::EventParser
     token = peek
     if token.kind.block_entry?
       mark = token.end_mark
-      skip
+      skip_token
       token = peek
       kind = token.kind
       if !kind.block_entry? && !kind.key? && !kind.value? && !kind.block_end?
@@ -369,13 +367,13 @@ class YAML::EventParser
     if first
       token = peek
       @marks << token.start_mark
-      skip
+      skip_token
     end
 
     token = peek
     if token.kind.key?
       mark = token.end_mark
-      skip
+      skip_token
       token = peek
       kind = token.kind
       if !kind.key? && !kind.value? && !kind.block_end?
@@ -388,7 +386,7 @@ class YAML::EventParser
     elsif token.kind.block_end?
       @state = @states.pop
       @marks.pop
-      skip
+      skip_token
       @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
     else
       error("did not find expected key", token.start_mark,
@@ -401,7 +399,7 @@ class YAML::EventParser
     token = peek
     if token.kind.value?
       mark = token.end_mark
-      skip
+      skip_token
       token = peek
       kind = token.kind
       if !kind.key? && !kind.value? && !kind.block_end?
@@ -422,14 +420,14 @@ class YAML::EventParser
     if first
       token = peek
       @marks << token.start_mark
-      skip
+      skip_token
     end
 
     token = peek
     unless token.kind.flow_sequence_end?
       unless first
         if token.kind.flow_entry?
-          skip
+          skip_token
           token = peek
         else
           error("did not find expected ',' or ']'", token.start_mark,
@@ -439,7 +437,7 @@ class YAML::EventParser
 
       if token.kind.key?
         @state = State::FLOW_SEQUENCE_ENTRY_MAPPING_KEY
-        skip
+        skip_token
         @event = Event.new(EventKind::MAPPING_START, token.start_mark, token.end_mark,
           implicit: true, mapping_style: MappingStyle::FLOW)
         return
@@ -451,7 +449,7 @@ class YAML::EventParser
 
     @state = @states.pop
     @marks.pop
-    skip
+    skip_token
     @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
   end
 
@@ -464,7 +462,7 @@ class YAML::EventParser
       parse_node(false, false)
     else
       mark = token.end_mark
-      skip
+      skip_token
       @state = State::FLOW_SEQUENCE_ENTRY_MAPPING_VALUE
       process_empty_scalar(mark)
     end
@@ -474,7 +472,7 @@ class YAML::EventParser
   private def parse_flow_sequence_entry_mapping_value : Nil
     token = peek
     if token.kind.value?
-      skip
+      skip_token
       token = peek
       if !token.kind.flow_entry? && !token.kind.flow_sequence_end?
         @states << State::FLOW_SEQUENCE_ENTRY_MAPPING_END
@@ -497,14 +495,14 @@ class YAML::EventParser
     if first
       token = peek
       @marks << token.start_mark
-      skip
+      skip_token
     end
 
     token = peek
     unless token.kind.flow_mapping_end?
       unless first
         if token.kind.flow_entry?
-          skip
+          skip_token
           token = peek
         else
           error("did not find expected ',' or '}'", token.start_mark,
@@ -513,7 +511,7 @@ class YAML::EventParser
       end
 
       if token.kind.key?
-        skip
+        skip_token
         token = peek
         kind = token.kind
         if !kind.value? && !kind.flow_entry? && !kind.flow_mapping_end?
@@ -531,7 +529,7 @@ class YAML::EventParser
 
     @state = @states.pop
     @marks.pop
-    skip
+    skip_token
     @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
   end
 
@@ -544,7 +542,7 @@ class YAML::EventParser
     end
 
     if token.kind.value?
-      skip
+      skip_token
       token = peek
       if !token.kind.flow_entry? && !token.kind.flow_mapping_end?
         @states << State::FLOW_MAPPING_KEY
@@ -581,7 +579,7 @@ class YAML::EventParser
         append_tag_directive(value, false, token.start_mark)
         (tag_directives ||= [] of {String, String}) << value
       end
-      skip
+      skip_token
       token = peek
     end
 

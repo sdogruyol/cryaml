@@ -1,3 +1,5 @@
+require "./reader"
+
 # :nodoc:
 #
 # A port of libyaml 0.2.5 `scanner.c`: turns the decoded character stream of
