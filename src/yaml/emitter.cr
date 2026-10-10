@@ -572,14 +572,16 @@ class YAML::Emitter
     @scalar_style = style
   end
 
-  # yaml_emitter_process_anchor
+  # yaml_emitter_process_anchor (inlined: there usually is none)
+  @[AlwaysInline]
   private def process_anchor : Nil
     return if @anchor.null?
     write_indicator(@anchor_alias ? "*" : "&", true, false, false)
     write_anchor(@anchor, @anchor_length)
   end
 
-  # yaml_emitter_process_tag
+  # yaml_emitter_process_tag (inlined: there usually is none)
+  @[AlwaysInline]
   private def process_tag : Nil
     return if @tag_handle.null? && @tag_suffix.null?
     if !@tag_handle.null?
@@ -1029,7 +1031,8 @@ class YAML::Emitter
     @indention = true
   end
 
-  # yaml_emitter_write_indicator
+  # yaml_emitter_write_indicator (inlined: indicators are short constants)
+  @[AlwaysInline]
   private def write_indicator(indicator : String, need_whitespace : Bool, is_whitespace : Bool, is_indention : Bool) : Nil
     put(' '.ord.to_u8) if need_whitespace && !@whitespace
     p = indicator.to_unsafe
