@@ -1219,14 +1219,7 @@ class YAML::Scanner < YAML::Reader
   # to be joined: `#ascii_run(2)` with that condition.
   @[AlwaysInline]
   private def plain_run : Int32
-    if @flow_level == 0
-      block_plain_run
-    else
-      ascii_run(2) do |b|
-        b > 0x20 && b != ':'.ord &&
-          !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord)
-      end
-    end
+    @flow_level == 0 ? block_plain_run : flow_plain_run
   end
 
   # `#plain_run` in the block context, eight bytes at a time (see the SWAR
@@ -1252,6 +1245,38 @@ class YAML::Scanner < YAML::Reader
       n &+= 1
     end
     n
+  end
+
+  # `#plain_run` in the flow context, eight bytes at a time: the run also
+  # ends at ',', '[', ']', '{' and '}'. Setting bit 0x20 of every byte turns
+  # '[' into '{' and ']' into '}', and no other byte into either, so two
+  # comparisons find all four.
+  @[AlwaysInline]
+  private def flow_plain_run : Int32
+    p = pointer
+    limit = @unread &- 2
+    n = 0
+    while n &+ 8 <= limit
+      word = Chars.load_word(p + n)
+      folded = word | (0x20_u64 &* Chars::SWAR_ONES)
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x21) |
+             Chars.equal_mask(word, ':'.ord.to_u8) | Chars.equal_mask(word, ','.ord.to_u8) |
+             Chars.equal_mask(folded, '{'.ord.to_u8) | Chars.equal_mask(folded, '}'.ord.to_u8)
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit
+      b = p[n]
+      break unless b > 0x20 && b < 0x80 && b != ':'.ord && !flow_indicator?(b)
+      n &+= 1
+    end
+    n
+  end
+
+  # ',', '[', ']', '{' or '}': what ends a plain scalar in the flow context.
+  @[AlwaysInline]
+  private def flow_indicator?(b : UInt8) : Bool
+    b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord
   end
 
   # At the line break that follows a plain scalar in the block context,
@@ -1307,26 +1332,27 @@ class YAML::Scanner < YAML::Reader
     # Fast path for the first round of the loop below, which usually ends
     # the scalar: its `CACHE(4)` finds the characters `#fetch_next_token`
     # just decoded, a document indicator or a comment would have been
-    # fetched as such, so it consumes a run of characters. If a ':' and a
-    # blank follow (a simple key), that ends the scalar with nothing else to
-    # do; otherwise the loop carries on after the run.
+    # fetched as such, so it consumes a run of characters. Then the scalar
+    # often ends with nothing else to do; otherwise the loop carries on
+    # after the run.
     resume = false
     if verbatim
       n = plain_run
       if n > 0
-        # `#plain_run` leaves the two characters after the run decoded.
-        if check?(':', n) && blankz?(n &+ 1)
-          skip_ascii(n)
-          return Token.new(TokenKind::SCALAR, start_mark, mark,
-            value: input_to_s(verbatim_start, input_offset, n), style: ScalarStyle::PLAIN)
-        end
+        # `#plain_run` leaves the two characters after the run decoded. The
+        # loop would stop at once at a ':' and a blank (a simple key) or, in
+        # a flow collection, at a flow indicator.
+        c = byte(n)
+        ends = (c == ':'.ord && blankz?(n &+ 1)) || (@flow_level != 0 && flow_indicator?(c))
         skip_ascii(n)
         verbatim_end = input_offset
         end_mark = mark
-        if @flow_level == 0 && check?('\n') && skip_to_dedent?(@indent &+ 1)
-          # What the loop below would do at this point when the scalar ends
-          # with its line.
+        if !ends && @flow_level == 0 && c == '\n'.ord && skip_to_dedent?(@indent &+ 1)
+          # What the loop does when the scalar ends with its line.
           @simple_key_allowed = true
+          ends = true
+        end
+        if ends
           return Token.new(TokenKind::SCALAR, start_mark, end_mark,
             value: input_to_s(verbatim_start, verbatim_end, n), style: ScalarStyle::PLAIN)
         end
@@ -1388,9 +1414,7 @@ class YAML::Scanner < YAML::Reader
           end
         end
 
-        if (c == ':'.ord && blankz?(1)) ||
-           (@flow_level != 0 &&
-           (c == ','.ord || c == '['.ord || c == ']'.ord || c == '{'.ord || c == '}'.ord))
+        if (c == ':'.ord && blankz?(1)) || (@flow_level != 0 && flow_indicator?(c))
           break
         end
 
