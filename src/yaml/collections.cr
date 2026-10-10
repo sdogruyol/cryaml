@@ -105,10 +105,9 @@ class YAML::Queue(T)
 
   # ENQUEUE of the item built at `#tail_slot`.
   @[AlwaysInline]
-  def push_tail_slot : self
+  def push_tail_slot : Nil
     raise IndexError.new if @tail == @capacity
     @tail &+= 1
-    self
   end
 
   # QUEUE_INSERT: inserts *item* *index* positions after the head.
