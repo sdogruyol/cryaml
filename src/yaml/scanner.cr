@@ -71,15 +71,35 @@ class YAML::Scanner < YAML::Reader
   # libyaml `SKIP_TOKEN`.
   @[AlwaysInline]
   def skip_token : Nil
-    @token_available = false
     @tokens_parsed += 1
     token = @tokens.shift
     @stream_end_produced = token.kind.stream_end?
+    # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
+    # `yaml_parser_fetch_more_tokens`. While tokens remain, that function
+    # first checks for stale simple keys, which is a no-op: the position
+    # hasn't moved since its previous run ended with the same check. So it
+    # fetches nothing unless the next token is a possible simple key, and
+    # otherwise the token stays available without the call.
+    @token_available = !@tokens.empty? && !simple_key_pending?
   end
 
   # yaml_parser_set_scanner_error
   private def scanner_error(context : String?, context_mark : Mark, problem : String) : NoReturn
     syntax_error(problem, mark, context, context_mark)
+  end
+
+  # Whether the next token is a possible simple key, so that more tokens are
+  # needed to decide whether a KEY goes before it.
+  @[AlwaysInline]
+  private def simple_key_pending? : Bool
+    i = @possible_floor
+    size = @simple_keys.size
+    while i < size
+      simple_key = @simple_keys.unsafe_fetch(i)
+      return true if simple_key.possible && simple_key.token_number == @tokens_parsed
+      i += 1
+    end
+    false
   end
 
   # yaml_parser_fetch_more_tokens
@@ -90,16 +110,7 @@ class YAML::Scanner < YAML::Reader
         need_more_tokens = true
       else
         stale_simple_keys
-        i = @possible_floor
-        size = @simple_keys.size
-        while i < size
-          simple_key = @simple_keys.unsafe_fetch(i)
-          if simple_key.possible && simple_key.token_number == @tokens_parsed
-            need_more_tokens = true
-            break
-          end
-          i += 1
-        end
+        need_more_tokens = simple_key_pending?
       end
       break unless need_more_tokens
       fetch_next_token
