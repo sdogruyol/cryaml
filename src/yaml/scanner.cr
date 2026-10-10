@@ -271,10 +271,16 @@ class YAML::Scanner < YAML::Reader
 
   # Keeps `@first_key_token` up to date when the possible key of the current
   # flow level stops being possible: if it was the first one, no level below
-  # has a possible key either.
+  # has a possible key either, so no key at all is possible, and the bounds
+  # that `#stale_simple_keys` checks are reset too.
   @[AlwaysInline]
   private def forget_first_key(simple_key : SimpleKey) : Nil
-    @first_key_token = Int64::MAX if simple_key.token_number == @first_key_token
+    if simple_key.token_number == @first_key_token
+      @first_key_token = Int64::MAX
+      @stale_key_line = Int64::MAX
+      @stale_key_index = Int64::MAX
+      @possible_floor = @simple_keys.size
+    end
   end
 
   # yaml_parser_increase_flow_level
