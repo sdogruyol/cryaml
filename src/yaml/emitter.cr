@@ -1015,6 +1015,7 @@ class YAML::Emitter
       return {false, false}
     end
     return {false, false} if s[length - 1] == ' '.ord
+    return simple_scalar_words(s, length) if length >= 8
     spaces = false
     i = 1
     while i < length
@@ -1026,6 +1027,39 @@ class YAML::Emitter
       i &+= 1 # below length
     end
     {true, spaces}
+  end
+
+  # The loop of `#simple_scalar` for *length* >= 8, eight bytes at a time:
+  # the words at 0, 8, ... and the last word, which may overlap the one
+  # before. The first byte passed the test in `#simple_scalar`, so it is in
+  # PLAIN_ASCII and changes neither result. Out of line, so it doesn't
+  # weigh on the registers of the inlined short case.
+  @[NoInline]
+  private def simple_scalar_words(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+    spaces = 0_u64
+    i = 0
+    while true
+      word = Chars.load_word(s + i)
+      return {false, false} unless plain_or_space_word?(word)
+      spaces |= Chars.equal_mask(word, ' '.ord.to_u8)
+      return {true, spaces != 0} if i == length &- 8
+      i = Math.min(i &+ 8, length &- 8)
+    end
+  end
+
+  # Whether every byte of *word* is in PLAIN_ASCII or a space: printable
+  # ASCII (0x20..0x7E) other than `#` `,` `:` `?` `[` `]` `{` `}`. With
+  # bit 5 set, `[` and `]` become `{` and `}`, and no other byte does.
+  # (A borrow can flag a byte after a flagged one, so only "none" is exact.)
+  @[AlwaysInline]
+  private def plain_or_space_word?(word : UInt64) : Bool
+    lower = word | 0x2020202020202020_u64
+    flags = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x20_u8) |
+            Chars.equal_mask(word, 0x7F_u8) |
+            Chars.equal_mask(word, '#'.ord.to_u8) | Chars.equal_mask(word, ','.ord.to_u8) |
+            Chars.equal_mask(word, ':'.ord.to_u8) | Chars.equal_mask(word, '?'.ord.to_u8) |
+            Chars.equal_mask(lower, '{'.ord.to_u8) | Chars.equal_mask(lower, '}'.ord.to_u8)
+    flags == 0
   end
 
   # yaml_emitter_analyze_event (inlined: mostly a few stores)
