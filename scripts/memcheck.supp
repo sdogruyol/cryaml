@@ -44,3 +44,20 @@
    fun:*Float::FastFloat::fastfloat_strncasecmp*
    fun:*Float::FastFloat::Detail::parse_infnan*
 }
+
+# PCRE2's JIT-compiled matchers load the subject with SIMD and may read past
+# its end (seen on GitHub's runners: a 16-byte load 15 bytes into a 28-byte
+# String, from `should_not match /age/` in spec/std/yaml/serializable_spec.cr).
+# JIT code has no object file, so its frames are "???"; `obj:???` matches
+# only that (`?` is one character, real object names are paths), never code
+# in the spec binary or a library.
+{
+   pcre2-jit-simd-overread-16
+   Memcheck:Addr16
+   obj:???
+}
+{
+   pcre2-jit-simd-overread-32
+   Memcheck:Addr32
+   obj:???
+}
