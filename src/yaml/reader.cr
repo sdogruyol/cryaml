@@ -32,7 +32,11 @@ class YAML::Reader
   @raw_buffer : Bytes?
   # Keeps the input string alive while `@raw` points into it.
   @input_string : String?
-  @io : IO?
+  # libyaml's `read_handler`, set for an IO input. A proc created where the
+  # input is known to be an `IO`, instead of an `IO?` instance variable: a
+  # program that only parses strings then never compiles `IO#read` of every
+  # `IO` type (which would cost its build time and binary size).
+  @read_handler : Proc(Bytes, Int32)?
   @string_size = 0
   @eof = false
   @encoding = Encoding::NONE
@@ -73,7 +77,7 @@ class YAML::Reader
       raw_buffer = Bytes.new(RAW_BUFFER_SIZE + PADDING)
       @raw_buffer = raw_buffer
       @raw = raw_buffer.to_unsafe
-      @io = input
+      @read_handler = ->(buffer : Bytes) { input.read(buffer) }
     end
   end
 
@@ -420,7 +424,7 @@ class YAML::Reader
     return if @raw_last - @raw_pos == RAW_BUFFER_SIZE
     return if @eof
 
-    if io = @io
+    if read_handler = @read_handler
       # Move the remaining bytes to the beginning of the chunk buffer.
       remaining = @raw_last - @raw_pos
       if @raw_pos > 0 && remaining > 0
@@ -428,7 +432,7 @@ class YAML::Reader
       end
       @raw_pos = 0
       @raw_last = remaining
-      size_read = io.read(Slice.new(@raw + @raw_last, RAW_BUFFER_SIZE - @raw_last))
+      size_read = read_handler.call(Slice.new(@raw + @raw_last, RAW_BUFFER_SIZE - @raw_last))
     else
       # Widen the window over the input string by up to a chunk.
       size_read = Math.min(RAW_BUFFER_SIZE - (@raw_last - @raw_pos), @string_size - @raw_last)
