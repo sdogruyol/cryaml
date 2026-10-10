@@ -38,12 +38,14 @@ end
 # * SCALAR: `value`, `style`
 # * VERSION_DIRECTIVE: `major`, `minor`
 struct YAML::Token
+  # Declared in this order so that the 4-byte fields pair up: 80 bytes
+  # instead of 88, and tokens are copied a lot.
   getter kind : TokenKind
+  getter style : ScalarStyle
   getter start_mark : Mark
   getter end_mark : Mark
   getter value : String
   getter handle : String
-  getter style : ScalarStyle
   getter major : Int32
   getter minor : Int32
 
