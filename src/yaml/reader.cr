@@ -42,6 +42,13 @@ class YAML::Reader
   @pos = 0
   @last = 0
   @unread = 0
+  # Whether `@buffer` is the input string itself. UTF-8 decodes to the same
+  # bytes, so for a `String` in UTF-8 validating each chunk where it lies
+  # stands in for copying it: `@pos` and `@last` are then offsets into the
+  # string, and nothing ever moves. When the input ends, the last few unread
+  # characters move to a small buffer of their own that can carry the final
+  # NUL and the zero padding, and decoding continues as for any other input.
+  @in_place = false
 
   # Current position (libyaml `parser->mark`).
   @index = 0_i64
@@ -51,10 +58,8 @@ class YAML::Reader
   def initialize(input : String | IO)
     case input
     in String
-      # A small document never needs the full-size buffer: one raw chunk is
-      # at most the whole string, and decoding grows by at most 3/2.
-      size = input.bytesize < BUFFER_SIZE // 2 ? input.bytesize * 2 + 64 : BUFFER_SIZE
-      @buffer = Bytes.new(size + PADDING)
+      # The buffer is chosen by `#determine_encoding`.
+      @buffer = Bytes.empty
       @input_string = input
       @raw = input.to_unsafe
       @string_size = input.bytesize
@@ -246,6 +251,7 @@ class YAML::Reader
     return if @unread >= length
 
     determine_encoding if @encoding.none?
+    return update_buffer_in_place(length) if @in_place
 
     # Move the unread characters to the beginning of the buffer.
     if 0 < @pos < @last
@@ -278,6 +284,33 @@ class YAML::Reader
     end
   end
 
+  # `#update_buffer` while `@buffer` is the input string: the same chunks are
+  # validated at the same moments, without moving or copying anything.
+  private def update_buffer_in_place(length : Int32) : Nil
+    first = true
+    while @unread < length
+      update_raw_buffer if !first || @raw_pos == @raw_last
+      first = false
+
+      decode_utf8(copy: false)
+
+      if @eof
+        # The string's memory ends right after its last character, so the
+        # unread characters (fewer than `length`) move to a buffer that has
+        # room for the NUL and the padding after them (`Bytes.new` zeroes).
+        size = @last - @pos
+        buffer = Bytes.new(size + 1 + PADDING)
+        buffer.to_unsafe.copy_from(@buffer.to_unsafe + @pos, size)
+        @buffer = buffer
+        @pos = 0
+        @last = size + 1
+        @unread += 1
+        @in_place = false
+        return
+      end
+    end
+  end
+
   # Reader errors are positioned at line 1, column 1, as libyaml's binding
   # reports them. The scanner keeps raising the stored error afterwards.
   private def reader_error(problem : String) : NoReturn
@@ -302,6 +335,19 @@ class YAML::Reader
       @raw_pos += 3
     else
       @encoding = Encoding::UTF8
+    end
+
+    if @input_string
+      if @encoding.utf8?
+        @in_place = true
+        @buffer = Bytes.new(@raw, @string_size, read_only: true)
+        @pos = @last = @raw_pos
+      else
+        # A small document never needs the full-size buffer: one raw chunk
+        # is at most the whole string, and decoding grows by at most 3/2.
+        size = @string_size < BUFFER_SIZE // 2 ? @string_size * 2 + 64 : BUFFER_SIZE
+        @buffer = Bytes.new(size + PADDING)
+      end
     end
   end
 
@@ -345,7 +391,9 @@ class YAML::Reader
     end
   end
 
-  private def decode_utf8 : Nil
+  # Validates the complete characters of the raw buffer and, if *copy*,
+  # copies them to `@buffer` (without, `@buffer` is the raw input itself).
+  private def decode_utf8(copy : Bool = true) : Nil
     raw = @raw
     out = @buffer.to_unsafe
     pos = @raw_pos
@@ -362,7 +410,7 @@ class YAML::Reader
         pointerof(word).as(Pointer(UInt8)).copy_from(raw + pos, 8)
         mask = non_printable_ascii_mask(word)
         good = mask == 0 ? 8 : printable_ascii_prefix(mask)
-        (out + out_pos).copy_from(raw + pos, 8)
+        (out + out_pos).copy_from(raw + pos, 8) if copy
         out_pos += good
         pos += good
         unread += good
@@ -377,7 +425,7 @@ class YAML::Reader
           sync_decode_state(pos, out_pos, unread)
           reader_error("control characters are not allowed")
         end
-        out[out_pos] = octet
+        out[out_pos] = octet if copy
         out_pos += 1
         pos += 1
         unread += 1
@@ -424,7 +472,7 @@ class YAML::Reader
         reader_error("control characters are not allowed")
       end
 
-      (out + out_pos).copy_from(raw + pos, width)
+      (out + out_pos).copy_from(raw + pos, width) if copy
       out_pos += width
       pos += width
       unread += 1
