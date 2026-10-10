@@ -84,8 +84,10 @@ messages, `YAML::Any` results, node trees and emitted YAML must be
 identical, and are. So are 3,805 `YAML::Builder` scripts (every value in
 every scalar style in every position, plus random and invalid ones). On top:
 a line-by-line review of the port against libyaml's C source, a differential
-fuzzer that runs nightly, and 100% line coverage of the scanner (98% overall;
-the rest is unreachable through the public API).
+fuzzer (1.2 billion cases in one overnight run; it also runs nightly in CI),
+valgrind memcheck over the suite and fuzzed inputs, and 100% line coverage of
+the scanner (98% overall; the rest is unreachable through the public API).
+See [docs/ROADMAP.md](docs/ROADMAP.md) for what was found along the way.
 
 **Tested where Crystal runs.** Linux x86_64 and aarch64, macOS arm64 and
 x86_64, Windows (MSVC and MinGW-w64), Alpine with a static binary, the
