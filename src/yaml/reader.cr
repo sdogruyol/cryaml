@@ -100,7 +100,7 @@ class YAML::Reader
   # Byte at *offset* from the current position.
   @[AlwaysInline]
   def byte(offset : Int32 = 0) : UInt8
-    @buffer.to_unsafe[@pos + offset]
+    @buffer.to_unsafe[@pos &+ offset]
   end
 
   # Pointer to the current position.
@@ -120,20 +120,20 @@ class YAML::Reader
   # `#verbatim_input?`).
   @[AlwaysInline]
   def input_offset : Int32
-    @buffer_offset + @pos
+    @buffer_offset &+ @pos
   end
 
   # The input between two `#input_offset`s, as a new string. The bytes were
   # validated as they were decoded.
   @[AlwaysInline]
   def input_to_s(start : Int32, finish : Int32) : String
-    String.new(@raw + start, finish - start)
+    String.new(@raw + start, finish &- start)
   end
 
   # Appends the input between two `#input_offset`s to *string*.
   @[AlwaysInline]
   def write_input(string : ByteBuffer, start : Int32, finish : Int32) : Nil
-    string.write(@raw + start, finish - start)
+    string.write(@raw + start, finish &- start)
   end
 
   @[AlwaysInline]
@@ -163,30 +163,36 @@ class YAML::Reader
     Chars.width(@buffer.to_unsafe + @pos, offset)
   end
 
+  # The primitives below advance the position with wrapping arithmetic
+  # (`&+`, `&-`), which skips the overflow checks of `+` and `-`: offsets
+  # stay within the buffer (an `Int32` size), `@unread` within its
+  # character count, and the `Int64` index, line and column count the
+  # characters of the input.
+
   # libyaml `SKIP`: advances one character.
   @[AlwaysInline]
   def skip : Nil
-    @index += 1
-    @column += 1
-    @unread -= 1
-    @pos += width
+    @index &+= 1
+    @column &+= 1
+    @unread &-= 1
+    @pos &+= width
   end
 
   # libyaml `SKIP_LINE`: advances over a line break (CR LF counts as one).
   @[AlwaysInline]
   def skip_line : Nil
     if crlf?
-      @index += 2
+      @index &+= 2
       @column = 0_i64
-      @line += 1
-      @unread -= 2
-      @pos += 2
+      @line &+= 1
+      @unread &-= 2
+      @pos &+= 2
     elsif break?
-      @index += 1
+      @index &+= 1
       @column = 0_i64
-      @line += 1
-      @unread -= 1
-      @pos += width
+      @line &+= 1
+      @unread &-= 1
+      @pos &+= width
     end
   end
 
@@ -199,10 +205,10 @@ class YAML::Reader
     else
       string.write(pointer, w)
     end
-    @pos += w
-    @index += 1
-    @column += 1
-    @unread -= 1
+    @pos &+= w
+    @index &+= 1
+    @column &+= 1
+    @unread &-= 1
   end
 
   # Number of characters at the current position (at most *max*) that are
@@ -216,12 +222,12 @@ class YAML::Reader
   @[AlwaysInline]
   def ascii_run(keep : Int32, max : Int32 = Int32::MAX, &) : Int32
     p = pointer
-    limit = Math.min(@unread - keep, max)
+    limit = Math.min(@unread &- keep, max)
     n = 0
     while n < limit
       b = p[n]
       break unless b < 0x80 && yield b
-      n += 1
+      n &+= 1
     end
     n
   end
@@ -229,10 +235,10 @@ class YAML::Reader
   # *count* times `SKIP` over ASCII characters (see `#ascii_run`).
   @[AlwaysInline]
   def skip_ascii(count : Int32) : Nil
-    @index += count
-    @column += count
-    @unread -= count
-    @pos += count
+    @index &+= count
+    @column &+= count
+    @unread &-= count
+    @pos &+= count
   end
 
   # *count* times `READ` of ASCII characters (see `#ascii_run`).
@@ -248,32 +254,32 @@ class YAML::Reader
   def read_line(string : ByteBuffer) : Nil
     if check?('\r') && check?('\n', 1)
       string << '\n'
-      @pos += 2
-      @index += 2
+      @pos &+= 2
+      @index &+= 2
       @column = 0_i64
-      @line += 1
-      @unread -= 2
+      @line &+= 1
+      @unread &-= 2
     elsif check?('\r') || check?('\n')
       string << '\n'
-      @pos += 1
-      @index += 1
+      @pos &+= 1
+      @index &+= 1
       @column = 0_i64
-      @line += 1
-      @unread -= 1
+      @line &+= 1
+      @unread &-= 1
     elsif byte == 0xC2 && byte(1) == 0x85
       string << '\n'
-      @pos += 2
-      @index += 1
+      @pos &+= 2
+      @index &+= 1
       @column = 0_i64
-      @line += 1
-      @unread -= 1
+      @line &+= 1
+      @unread &-= 1
     elsif byte == 0xE2 && byte(1) == 0x80 && (byte(2) == 0xA8 || byte(2) == 0xA9)
       string.write(pointer, 3)
-      @pos += 3
-      @index += 1
+      @pos &+= 3
+      @index &+= 1
       @column = 0_i64
-      @line += 1
-      @unread -= 1
+      @line &+= 1
+      @unread &-= 1
     end
   end
 
