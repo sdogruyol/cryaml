@@ -22,6 +22,9 @@ class YAML::Scanner < YAML::Reader
   # an `Int64` and are computed with wrapping arithmetic; a token number
   # minus `@tokens_parsed` is a position in the queue (an `Int32`).
   @tokens_parsed = 0_i64
+  # A run of BLOCK_END tokens queued as one entry (see `#unroll_indent`).
+  @block_end_run = 0
+  @block_end_run_token = 0_i64
   @stream_start_produced = false
   @stream_end_produced = false
   @indent = -1
@@ -90,8 +93,16 @@ class YAML::Scanner < YAML::Reader
   # libyaml `SKIP_TOKEN`.
   @[AlwaysInline]
   def skip_token : Nil
+    kind = @tokens.first_pointer.value.kind
+    if kind.block_end? && @block_end_run != 0 && @block_end_run_token == @tokens_parsed
+      # One of the BLOCK_END tokens the entry at the head stands for (see
+      # `#unroll_indent`): the entry stays, and so does its availability.
+      @block_end_run &-= 1
+      return
+    end
     @tokens_parsed &+= 1
-    @stream_end_produced = @tokens.shift_keeping_slot.kind.stream_end?
+    @tokens.shift_keeping_slot
+    @stream_end_produced = kind.stream_end?
     # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
     # `yaml_parser_fetch_more_tokens`. While tokens remain, that function
     # first checks for stale simple keys, which is a no-op: the position
@@ -317,19 +328,45 @@ class YAML::Scanner < YAML::Reader
       if number == -1
         @tokens << token
       else
-        @tokens.insert((number &- @tokens_parsed).to_i32!, token)
+        insert_token(number, token)
       end
     end
   end
 
+  # QUEUE_INSERT of *token* as token number *number*.
+  @[AlwaysInline]
+  private def insert_token(number : Int64, token : Token) : Nil
+    @tokens.insert((number &- @tokens_parsed).to_i32!, token)
+    # A BLOCK_END run behind it moves one entry back.
+    @block_end_run_token &+= 1 if @block_end_run != 0 && number <= @block_end_run_token
+  end
+
   # yaml_parser_unroll_indent
+  #
+  # libyaml queues one BLOCK_END token per level; leaving a deep structure
+  # queues hundreds of them (all with the same mark) before the next token.
+  # Here one queue entry stands for all of them: `@block_end_run` more are
+  # left at the entry with token number `@block_end_run_token`, and
+  # `#skip_token` hands them out one by one while that entry is the head.
+  # Token numbers count queue entries, so the queue positions they give are
+  # unchanged. Only one run is ever queued at a time (a new one starts at
+  # a line's first token, after the parser took what was queued); should
+  # another come, its tokens are queued one by one.
   @[AlwaysInline]
   private def unroll_indent(column : Int64) : Nil
-    return if @flow_level != 0
+    return if @flow_level != 0 || @indent <= column
+    count = 0
     while @indent > column
-      m = mark
-      @tokens << Token.new(TokenKind::BLOCK_END, m, m)
       @indent = @indents.pop
+      count &+= 1
+    end
+    m = mark
+    @tokens << Token.new(TokenKind::BLOCK_END, m, m)
+    if @block_end_run == 0
+      @block_end_run = count &- 1
+      @block_end_run_token = @tokens_parsed &+ @tokens.size &- 1
+    else
+      (count &- 1).times { @tokens << Token.new(TokenKind::BLOCK_END, m, m) }
     end
   end
 
@@ -441,8 +478,7 @@ class YAML::Scanner < YAML::Reader
     pointer = current_simple_key
     simple_key = pointer.value
     if simple_key.possible
-      @tokens.insert((simple_key.token_number &- @tokens_parsed).to_i32!,
-        Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
+      insert_token(simple_key.token_number, Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
       roll_indent(simple_key.mark.column, simple_key.token_number,
         TokenKind::BLOCK_MAPPING_START, simple_key.mark)
       pointer.value = simple_key.copy_with(possible: false)
