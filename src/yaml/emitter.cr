@@ -4,7 +4,18 @@
 # UTF-8 output only. Errors make `#emit` return false and set `#problem`,
 # like `yaml_emitter_emit`.
 class YAML::Emitter
+  # libyaml's output buffer size: the buffer is flushed when fewer than 5
+  # bytes of it are free (FLUSH), so the IO receives writes of these sizes.
   OUTPUT_BUFFER_SIZE = 16384
+
+  # libyaml mallocs its 16 KiB buffer outside the GC; here it is GC memory,
+  # allocated per emitter, and most outputs (configs, small objects) are
+  # much smaller. So the buffer starts at 1 KiB and grows to
+  # OUTPUT_BUFFER_SIZE in one step when that fills up (in one step: growing
+  # gradually allocated more in total for large outputs, measured). Flushes
+  # still happen only when the full 16 KiB would be used, so the IO sees the
+  # same writes.
+  private INITIAL_BUFFER_SIZE = 1024
 
   # yaml_emitter_state_t
   enum State
@@ -82,7 +93,12 @@ class YAML::Emitter
   @ascii_word = false
 
   def initialize(@io : IO)
-    @buffer = Bytes.new(OUTPUT_BUFFER_SIZE)
+    # `@buffer[0, @capacity]` is allocated; `@buffer[0, @pos]` is pending
+    # output. FLUSH (or growing) is due once `@pos` reaches `@write_limit`,
+    # `@capacity - 5`, kept to make that test a single comparison.
+    @capacity = INITIAL_BUFFER_SIZE
+    @write_limit = @capacity - 5
+    @buffer = Pointer(UInt8).malloc(@capacity)
     @pos = 0
   end
 
@@ -132,7 +148,7 @@ class YAML::Emitter
     if @pos > 0
       size = @pos
       @pos = 0
-      @io.write_string(@buffer[0, size])
+      @io.write_string(Slice.new(@buffer, size))
     end
     true
   end
@@ -934,18 +950,38 @@ class YAML::Emitter
     end
   end
 
-  # FLUSH. Afterwards there is room for at least 5 bytes, so the writes
-  # below advance `@pos` with `&+`: it stays below OUTPUT_BUFFER_SIZE.
+  # FLUSH: flushes when fewer than 5 of OUTPUT_BUFFER_SIZE bytes are free,
+  # first growing the allocated buffer if it is smaller. Afterwards there is
+  # room for at least 5 bytes, so the writes below advance `@pos` with `&+`:
+  # it stays below `@capacity`.
   @[AlwaysInline]
   private def flush_if_needed : Nil
-    flush unless @pos + 5 < OUTPUT_BUFFER_SIZE
+    return if @pos < @write_limit
+    grow_buffer
+    flush unless @pos < @write_limit
+  end
+
+  # Grows the buffer to OUTPUT_BUFFER_SIZE (see INITIAL_BUFFER_SIZE).
+  private def grow_buffer : Nil
+    return if @capacity == OUTPUT_BUFFER_SIZE
+    @capacity = OUTPUT_BUFFER_SIZE
+    @write_limit = @capacity - 5
+    @buffer = @buffer.realloc(@capacity)
+  end
+
+  # Whether *count* more bytes can be written without a FLUSH, growing the
+  # buffer for them if needed.
+  private def grow_for?(count : Int32) : Bool
+    return false unless count <= OUTPUT_BUFFER_SIZE - 5 - @pos
+    grow_buffer
+    true
   end
 
   # PUT
   @[AlwaysInline]
   private def put(value : UInt8) : Nil
     flush_if_needed
-    @buffer.to_unsafe[@pos] = value
+    @buffer[@pos] = value
     @pos &+= 1
     @column += 1
   end
@@ -954,7 +990,7 @@ class YAML::Emitter
   @[AlwaysInline]
   private def put_break : Nil
     flush_if_needed
-    @buffer.to_unsafe[@pos] = '\n'.ord.to_u8
+    @buffer[@pos] = '\n'.ord.to_u8
     @pos &+= 1
     @column = 0
   end
@@ -965,7 +1001,7 @@ class YAML::Emitter
   @[AlwaysInline]
   private def copy(p : Pointer(UInt8), i : Int32) : Int32
     w = Chars.width(p, i)
-    buf = @buffer.to_unsafe + @pos
+    buf = @buffer + @pos
     k = 0
     while k < w
       buf[k] = p[i &+ k]
@@ -986,18 +1022,18 @@ class YAML::Emitter
 
   # WRITE repeated over the characters at p+i (before *length*) that are
   # ASCII, satisfy the block, and can be written one byte each before
-  # `FLUSH` would flush the buffer; returns the new index. Loops that WRITE
-  # character by character use it to copy such a run at once, so the buffer
-  # is still flushed at the same characters. Each byte is stored as it is
-  # checked: short runs are the common case, and a call to memcpy per run
-  # would cost more than the copy.
+  # `FLUSH` would flush or grow the buffer; returns the new index. Loops
+  # that WRITE character by character use it to copy such a run at once, so
+  # the buffer is still flushed at the same characters. Each byte is stored
+  # as it is checked: short runs are the common case, and a call to memcpy
+  # per run would cost more than the copy.
   @[AlwaysInline]
   private def write_ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
     # `n < limit` keeps p[i + n] inside the value and dst[n] inside the
     # buffer, so `n`, `i + n` and `@pos + n` can't overflow.
-    limit = Math.min(length - i, OUTPUT_BUFFER_SIZE - 5 - @pos)
+    limit = Math.min(length - i, @write_limit - @pos)
     src = p + i
-    dst = @buffer.to_unsafe + @pos
+    dst = @buffer + @pos
     n = 0
     while n < limit
       b = src[n]
@@ -1031,11 +1067,12 @@ class YAML::Emitter
       put_break
     end
     while @column < indent
-      # Fast path: PUT repeated over the spaces that fit before a flush.
-      n = Math.min(indent - @column, OUTPUT_BUFFER_SIZE - 5 - @pos)
+      # Fast path: PUT repeated over the spaces that fit before a flush (or
+      # growing the buffer).
+      n = Math.min(indent - @column, @write_limit - @pos)
       if n > 0
-        buf = @buffer.to_unsafe + @pos
-        if n <= 16 && @pos <= OUTPUT_BUFFER_SIZE - 16
+        buf = @buffer + @pos
+        if n <= 16 && @pos <= @capacity - 16
           # Indents are short: store 16 spaces (inside the buffer) instead
           # of calling memset. Those past `n` are past the end of the output,
           # which overwrites them.
@@ -1137,8 +1174,8 @@ class YAML::Emitter
     # Fast path: the loop below would WRITE a one-word ASCII scalar (see
     # `@ascii_word`, which describes *p*) character by character; copy it
     # at once if no FLUSH would happen on the way.
-    if @ascii_word && length <= OUTPUT_BUFFER_SIZE - 5 - @pos
-      (@buffer.to_unsafe + @pos).copy_from(p, length)
+    if @ascii_word && (length <= @write_limit - @pos || grow_for?(length))
+      (@buffer + @pos).copy_from(p, length)
       @pos += length
       @column += length
       @whitespace = false
