@@ -77,6 +77,9 @@ class YAML::Emitter
   @single_quoted_allowed = false
   @block_allowed = false
   @scalar_style = ScalarStyle::ANY
+  # Not in libyaml: set by analyze_scalar when the scalar is one simple word
+  # (see `#simple_scalar`), which write_plain_scalar copies at once.
+  @ascii_word = false
 
   def initialize(@io : IO)
     @buffer = Bytes.new(OUTPUT_BUFFER_SIZE)
@@ -691,6 +694,7 @@ class YAML::Emitter
 
     @scalar_value = value
     @scalar_length = length
+    @ascii_word = false
 
     if length == 0
       @multiline = false
@@ -701,12 +705,14 @@ class YAML::Emitter
       return
     end
 
-    if simple_scalar?(value, length)
+    simple, spaces = simple_scalar(value, length)
+    if simple
       @multiline = false
       @flow_plain_allowed = true
       @block_plain_allowed = true
       @single_quoted_allowed = true
       @block_allowed = true
+      @ascii_word = !spaces
       return
     end
 
@@ -873,20 +879,25 @@ class YAML::Emitter
   end
 
   # Whether `analyze_scalar` would set no flag for the scalar at *s*
-  # (*length* > 0): its first character is in FIRST_ASCII, the others are in
-  # PLAIN_ASCII or spaces, and it doesn't end in a space. Such spaces set no
-  # flag: no break is next to them, and the indicators that look at them
-  # (`#` after one, `:` before one) are not in PLAIN_ASCII.
+  # (*length* > 0), and whether it has spaces. It sets none when the first
+  # character is in FIRST_ASCII, the others are in PLAIN_ASCII or spaces,
+  # and the last isn't a space. Such spaces set no flag: no break is next to
+  # them, and the indicators that look at them (`#` after one, `:` before
+  # one) are not in PLAIN_ASCII.
   @[AlwaysInline]
-  private def simple_scalar?(s : Pointer(UInt8), length : Int32) : Bool
-    return false unless first_ascii?(s[0]) && s[length - 1] != ' '.ord
+  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+    return {false, false} unless first_ascii?(s[0]) && s[length - 1] != ' '.ord
+    spaces = false
     i = 1
     while i < length
       c = s[i]
-      return false unless c == ' '.ord || plain_ascii?(c)
+      unless plain_ascii?(c)
+        return {false, false} unless c == ' '.ord
+        spaces = true
+      end
       i &+= 1 # below length
     end
-    true
+    {true, spaces}
   end
 
   # yaml_emitter_analyze_event
@@ -1118,6 +1129,18 @@ class YAML::Emitter
     # Avoid trailing spaces for empty values in block mode.
     if !@whitespace && (length != 0 || @flow_level > 0)
       put(' '.ord.to_u8)
+    end
+
+    # Fast path: the loop below would WRITE a one-word ASCII scalar (see
+    # `@ascii_word`, which describes *p*) character by character; copy it
+    # at once if no FLUSH would happen on the way.
+    if @ascii_word && length <= OUTPUT_BUFFER_SIZE - 5 - @pos
+      (@buffer.to_unsafe + @pos).copy_from(p, length)
+      @pos += length
+      @column += length
+      @whitespace = false
+      @indention = false
+      return
     end
 
     i = 0
