@@ -1,0 +1,46 @@
+# valgrind suppressions for scripts/memcheck.sh: known out-of-bounds accesses
+# inside Crystal's stdlib (1.21 and master as of 2026-10), visible only with
+# -Dgc_none because Boehm's allocation slack hides them. Each entry is pinned
+# to its stdlib frames, so an engine error never matches.
+
+# String::Builder#increase_capacity_by doesn't reserve the trailing NUL, so
+# #to_s writes it one byte past the allocation when the content fills the
+# buffer exactly.
+{
+   stdlib-string-builder-trailing-nul
+   Memcheck:Addr1
+   fun:*Pointer(UInt8)@Pointer(T)#[]=*
+   fun:*String::Builder#to_s*
+}
+
+# Char::Reader (1.21) decodes at pos == bytesize, reading the NUL terminator,
+# which is legitimate except for strings from String::Builder above, whose
+# NUL lies outside the allocation. Seen through String#scrub (spec/support/
+# dump.cr) and Path#relative_to (spec file names).
+{
+   stdlib-char-reader-nul-via-scrub
+   Memcheck:Addr1
+   fun:*Pointer(UInt8)@Pointer(T)#[]<*
+   fun:*Char::Reader#byte_at*
+   fun:*Char::Reader#decode_current_char*
+   fun:*Char::Reader#next_char*
+   fun:*String#scrub*
+}
+{
+   stdlib-char-reader-nul-via-path
+   Memcheck:Addr1
+   fun:*Pointer(UInt8)@Pointer(T)#[]<*
+   fun:*Char::Reader#byte_at*
+   fun:*Char::Reader#decode_current_char*
+   fun:*Path::next_part_separator_index*
+}
+
+# Float::FastFloat's parse_infnan compares "inf" outside the length guard
+# that upstream fast_float has, reading up to two bytes past short inputs.
+{
+   stdlib-fast-float-infnan-overread
+   Memcheck:Addr1
+   fun:*Pointer(UInt8)@Pointer(T)#[]<*
+   fun:*Float::FastFloat::fastfloat_strncasecmp*
+   fun:*Float::FastFloat::Detail::parse_infnan*
+}
