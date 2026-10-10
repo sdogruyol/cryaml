@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: "1.21.0"
       - run: sudo apt-get update && sudo apt-get install -y libyaml-dev

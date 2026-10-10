@@ -15,8 +15,10 @@ FLOORS = {
 
 report = JSON.parse(File.read(ARGV[0]))
 failed = false
+seen = Set(String).new
 report["files"].as_a.each do |file|
   name = file["file"].as_s.split("/src/").last
+  seen << name
   percent = file["percent_covered"].as_s.to_f
   floor = FLOORS[name]? || 0.0
   below = percent < floor
@@ -25,4 +27,10 @@ report["files"].as_a.each do |file|
     below ? "  below the #{floor}% floor" : "")
 end
 printf("total %.2f%%\n", report["percent_covered"].as_s.to_f)
+# A floored file kcov didn't report (for example after a DWARF change) must
+# not pass silently.
+(FLOORS.keys - seen.to_a).each do |name|
+  puts "#{name}: missing from the report"
+  failed = true
+end
 exit(failed ? 1 : 0)

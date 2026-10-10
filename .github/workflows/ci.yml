@@ -17,8 +17,8 @@ env:
 
 jobs:
   # The whole suite on every native platform. Differential specs compare with
-  # the recorded libyaml 0.2.5 output (spec/fixtures/golden), so no libyaml
-  # is installed here.
+  # the recorded libyaml 0.2.5 output (spec/fixtures/golden), so they don't
+  # need libyaml (install-crystal may still install it).
   spec:
     name: spec (${{ matrix.name }})
     strategy:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
       - run: crystal spec --order random
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
       - name: Install libyaml 0.2.5
@@ -94,7 +94,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: UCRT64
           update: true
@@ -178,10 +178,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
-      - run: crystal tool format --check src spec bench scripts shim
+      - run: crystal tool format --check src spec bench scripts shim fuzz
       - name: No lib/fun/Link declarations or LibC calls in src/
         run: |
           # src/cryaml.cr names LibYAML only to detect the stdlib binding.
@@ -237,7 +237,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ matrix.crystal }}
       - run: crystal run scripts/stdlib_drift.cr
@@ -259,7 +259,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
       - name: Build kcov (not packaged for Ubuntu 24.04)
@@ -278,38 +278,47 @@ jobs:
           path: .cache/coverage/report
 
   # Unmodified projects that use YAML, built on cryaml through the shim.
+  # Pinned to the commits last checked, so upstream changes can't turn CI red.
   downstream:
     name: downstream (${{ matrix.repo }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { repo: crystal-lang/shards, specs: spec/unit }
-          - { repo: crystal-ameba/ameba, specs: spec }
-          - { repo: crystal-i18n/i18n, specs: spec }
+          - { repo: crystal-lang/shards, ref: 508a17e75052a979ef7c5bb377bc6488153bb086, specs: spec/unit }
+          - { repo: crystal-ameba/ameba, ref: 69ff46f0de0fc80cea6c1d63130f609935c5616a, specs: spec }
+          - { repo: crystal-i18n/i18n, ref: 2ee3ae733626a23ae7283f303101cba946f2218e, specs: spec }
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y fossil mercurial
       - name: Test ${{ matrix.repo }} on cryaml
         env:
           REPO: ${{ matrix.repo }}
+          REF: ${{ matrix.ref }}
           SPECS: ${{ matrix.specs }}
         run: |
-          git clone --depth 1 "https://github.com/$REPO.git" /tmp/project
+          git init -q /tmp/project
           cryaml="$PWD"
           cd /tmp/project
+          git fetch -q --depth 1 "https://github.com/$REPO.git" "$REF"
+          git checkout -q FETCH_HEAD
           shards install --ignore-crystal-version
           ln -s "$cryaml" lib/cryaml
-          # Loading the stdlib's yaml next to cryaml doesn't compile (see
-          # src/cryaml.cr), so a passing build proves cryaml was used.
           export CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)"
-          crystal spec $SPECS
+          # libyaml is installed on the runner, so if the shim weren't picked
+          # up the specs would silently test the stdlib: check the binary.
+          crystal build $(find $SPECS -name '*_spec.cr' | sort) -o /tmp/specs
+          if ldd /tmp/specs | grep -i yaml; then
+            echo "specs linked libyaml: the shim wasn't used" >&2
+            exit 1
+          fi
+          /tmp/specs
 
   # Every file has copyright and license information (REUSE.toml).
   reuse:
@@ -318,7 +327,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: fsfe/reuse-action@v5
+      - uses: fsfe/reuse-action@bb774aa972c2a89ff34781233d275075cbddf542 # v5
 
   # Engine memory safety: specs and fuzzer-generated inputs under valgrind
   # with -Dgc_none (plain malloc, so out-of-bounds access is visible).
@@ -328,7 +337,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: crystal-lang/install-crystal@v1
+      - uses: crystal-lang/install-crystal@46e48b6238ee23b1a6ef08ec39f12fb234676006 # v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
       - run: sudo apt-get update && sudo apt-get install -y valgrind
