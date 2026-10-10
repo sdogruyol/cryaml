@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1 (unreleased)
+
+### Fixed
+
+- `require "yaml"` (or `big/yaml`, `uri/yaml`, `uuid/yaml`) after
+  `require "cryaml"` compiled and silently replaced cryaml's `PullParser`
+  and `Builder` with the libyaml binding. It now fails with an explanation,
+  in either order.
+- Scalars longer than 1 GiB raised `OverflowError` while scanning; they now
+  parse like with libyaml, up to `Int32::MAX` bytes.
+- A `YAML::Builder` stream raised `OverflowError` after 2^31 line breaks.
+- Scanned tokens and emitted events stayed reachable from their queues after
+  being consumed, keeping large scalars alive as long as the parser or
+  builder.
+- The `cryaml/uri` and `cryaml/uuid` docs pointed at the stdlib requires.
+
 ## 0.1.0 (2026-10-10)
 
 First release: the stdlib `YAML` module on a pure Crystal engine.
