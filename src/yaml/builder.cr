@@ -211,30 +211,41 @@ class YAML::Builder
 
   # libyaml `yaml_check_utf8`: well-formed sequences without overlong forms.
   # Unlike `String#valid_encoding?` it accepts encoded surrogates and code
-  # points above U+10FFFF, which the emitter writes as escapes.
+  # points above U+10FFFF, which the emitter writes as escapes. The empty
+  # value of every event but SCALAR is checked inline.
   @[AlwaysInline]
   private def utf8?(string : String?) : Bool
-    string.nil? || utf8_string?(string)
+    string.nil? || string.bytesize == 0 || utf8_string?(string)
   end
 
   private def utf8_string?(string : String) : Bool
     p = string.to_unsafe
     size = string.bytesize
-    # Fast path for the usual short value: 4 to 16 bytes are all ASCII when
-    # two overlapping words that cover them are.
-    if size >= 4 && size <= 16
+    # Fast path for the usual short value: up to 16 bytes are all ASCII when
+    # two overlapping words that cover them are (or, below 4 bytes, the
+    # first, middle and last byte).
+    if size <= 16
       if size >= 8
         head = Chars.load_word(p)
-        tail = Chars.load_word(p + size - 8)
+        tail = Chars.load_word(p + (size &- 8))
         return true if Chars.non_ascii_mask(head | tail) == 0
-      else
+      elsif size >= 4
         head32 = uninitialized UInt32
         tail32 = uninitialized UInt32
         pointerof(head32).as(Pointer(UInt8)).copy_from(p, 4)
-        pointerof(tail32).as(Pointer(UInt8)).copy_from(p + size - 4, 4)
+        pointerof(tail32).as(Pointer(UInt8)).copy_from(p + (size &- 4), 4)
         return true if (head32 | tail32) & 0x80808080_u32 == 0
+      elsif size > 0
+        return true if (p[0] | p[size >> 1] | p[size &- 1]) < 0x80
       end
     end
+    utf8_sequences?(p, size)
+  end
+
+  # The rest of `#utf8_string?`, out of line so its fast path needs no
+  # register-saving prologue.
+  @[NoInline]
+  private def utf8_sequences?(p : Pointer(UInt8), size : Int32) : Bool
     i = 0
     while i < size
       # Fast path: skip ASCII, eight bytes at once while they fit. `i` stays
