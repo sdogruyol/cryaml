@@ -169,6 +169,13 @@ struct YAML::Stack(T)
     @buffer[@size]
   end
 
+  # The bottom of the stack (libyaml's `start`), valid until the next
+  # `#push`.
+  @[AlwaysInline]
+  def to_unsafe : Pointer(T)
+    @buffer
+  end
+
   # yaml_stack_extend
   private def extend_stack : Nil
     capacity = @capacity == 0 ? INITIAL_CAPACITY : @capacity * 2

@@ -27,8 +27,13 @@ class YAML::Scanner < YAML::Reader
   @indent = -1
   @indents = Stack(Int32).new
   @simple_key_allowed = false
-  @simple_keys = [] of SimpleKey
-  # Every simple key below this index is known not to be possible. libyaml
+  # libyaml's `simple_keys` stack holds one key per flow level, the stream's
+  # (level 0) at the bottom. Here the stream's key is a field of its own and
+  # the stack only holds those of flow levels 1 to `@flow_level`, so block
+  # documents never allocate it (see `#simple_key_at`).
+  @simple_key = SimpleKey.new(false, false, 0_i64, Mark.new)
+  @flow_simple_keys = Stack(SimpleKey).new
+  # Every simple key below this level is known not to be possible. libyaml
   # walks the whole stack on every token, which is quadratic in the flow
   # nesting depth; starting at the floor visits the same possible keys in
   # the same order, so behavior is unchanged.
@@ -199,40 +204,45 @@ class YAML::Scanner < YAML::Reader
     stale_key_line = Int64::MAX
     stale_key_index = Int64::MAX
     first_key_token = Int64::MAX
-    i = @possible_floor
-    size = @simple_keys.size
-    while i < size
-      simple_key = @simple_keys.unsafe_fetch(i)
+    level = @possible_floor
+    while level <= @flow_level
+      pointer = simple_key_at(level)
+      simple_key = pointer.value
       if simple_key.possible
         if simple_key.mark.line < @line || simple_key.mark.index &+ 1024 < @index
           if simple_key.required
             scanner_error("while scanning a simple key", simple_key.mark,
               "could not find expected ':'")
           end
-          @simple_keys[i] = simple_key.copy_with(possible: false)
+          pointer.value = simple_key.copy_with(possible: false)
         else
           stale_key_line = Math.min(stale_key_line, simple_key.mark.line)
           stale_key_index = Math.min(stale_key_index, simple_key.mark.index &+ 1024)
           first_key_token = Math.min(first_key_token, simple_key.token_number)
         end
       end
-      i += 1
+      level += 1
     end
     @stale_key_line = stale_key_line
     @stale_key_index = stale_key_index
     @first_key_token = first_key_token
-    while @possible_floor < size && !@simple_keys.unsafe_fetch(@possible_floor).possible
+    while @possible_floor <= @flow_level && !simple_key_at(@possible_floor).value.possible
       @possible_floor += 1
     end
   end
 
+  # The simple key of flow level *level* (libyaml's `simple_keys.start +
+  # level`), for `0 <= level <= @flow_level`.
+  @[AlwaysInline]
+  private def simple_key_at(level : Int32) : Pointer(SimpleKey)
+    level == 0 ? pointerof(@simple_key) : @flow_simple_keys.to_unsafe + (level &- 1)
+  end
+
   # The simple key of the current flow level (libyaml's
-  # `simple_keys.top - 1`). The stack is never empty here: the stream's key
-  # is pushed by `#fetch_stream_start` before any other token is fetched,
-  # and `#decrease_flow_level` only pops the keys of flow levels.
+  # `simple_keys.top - 1`).
   @[AlwaysInline]
   private def current_simple_key : Pointer(SimpleKey)
-    @simple_keys.to_unsafe + (@simple_keys.size &- 1)
+    simple_key_at(@flow_level)
   end
 
   # yaml_parser_save_simple_key
@@ -241,11 +251,10 @@ class YAML::Scanner < YAML::Reader
     required = @flow_level == 0 && @indent == @column
     if @simple_key_allowed
       simple_key = SimpleKey.new(true, required, @tokens_parsed &+ @tokens.size, mark)
-      top = @simple_keys.size &- 1
-      pointer = @simple_keys.to_unsafe + top
+      pointer = current_simple_key
       remove_simple_key(pointer)
       pointer.value = simple_key
-      @possible_floor = Math.min(@possible_floor, top)
+      @possible_floor = Math.min(@possible_floor, @flow_level)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
       @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index &+ 1024)
       # Any other possible key has a smaller token number.
@@ -279,13 +288,13 @@ class YAML::Scanner < YAML::Reader
       @first_key_token = Int64::MAX
       @stale_key_line = Int64::MAX
       @stale_key_index = Int64::MAX
-      @possible_floor = @simple_keys.size
+      @possible_floor = @flow_level &+ 1
     end
   end
 
   # yaml_parser_increase_flow_level
   private def increase_flow_level : Nil
-    @simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
+    @flow_simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
     @flow_level += 1
   end
 
@@ -293,8 +302,8 @@ class YAML::Scanner < YAML::Reader
   private def decrease_flow_level : Nil
     if @flow_level != 0
       @flow_level -= 1
-      @simple_keys.pop
-      @possible_floor = Math.min(@possible_floor, @simple_keys.size)
+      @flow_simple_keys.pop
+      @possible_floor = Math.min(@possible_floor, @flow_level &+ 1)
     end
   end
 
@@ -327,7 +336,8 @@ class YAML::Scanner < YAML::Reader
   # yaml_parser_fetch_stream_start
   private def fetch_stream_start : Nil
     @indent = -1
-    @simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
+    # libyaml pushes the stream's simple key here; `@simple_key` is that
+    # key, not possible yet.
     @simple_key_allowed = true
     @stream_start_produced = true
     m = mark
