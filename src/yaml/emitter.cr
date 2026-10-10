@@ -365,8 +365,7 @@ class YAML::Emitter
 
   # yaml_emitter_emit_document_content
   private def emit_document_content(event : Event*) : Nil
-    @states.push(State::DOCUMENT_END)
-    emit_node(event, true, false, false, false)
+    emit_node(event, true, false, false, false, State::DOCUMENT_END)
   end
 
   # yaml_emitter_emit_document_end
@@ -411,8 +410,7 @@ class YAML::Emitter
 
     write_indicator(",", false, false, false) unless first
     write_indent if @canonical || @column > @best_width
-    @states.push(State::FLOW_SEQUENCE_ITEM)
-    emit_node(event, false, true, false, false)
+    emit_node(event, false, true, false, false, State::FLOW_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_flow_mapping_key
@@ -439,12 +437,10 @@ class YAML::Emitter
     write_indent if @canonical || @column > @best_width
 
     if !@canonical && check_simple_key?(event)
-      @states.push(State::FLOW_MAPPING_SIMPLE_VALUE)
-      emit_node(event, false, false, true, true)
+      emit_node(event, false, false, true, true, State::FLOW_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, false)
-      @states.push(State::FLOW_MAPPING_VALUE)
-      emit_node(event, false, false, true, false)
+      emit_node(event, false, false, true, false, State::FLOW_MAPPING_VALUE)
     end
   end
 
@@ -456,8 +452,7 @@ class YAML::Emitter
       write_indent if @canonical || @column > @best_width
       write_indicator(":", true, false, false)
     end
-    @states.push(State::FLOW_MAPPING_KEY)
-    emit_node(event, false, false, true, false)
+    emit_node(event, false, false, true, false, State::FLOW_MAPPING_KEY)
   end
 
   # yaml_emitter_emit_block_sequence_item
@@ -472,8 +467,7 @@ class YAML::Emitter
 
     write_indent
     write_indicator("-", true, false, true)
-    @states.push(State::BLOCK_SEQUENCE_ITEM)
-    emit_node(event, false, true, false, false)
+    emit_node(event, false, true, false, false, State::BLOCK_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_block_mapping_key
@@ -489,12 +483,10 @@ class YAML::Emitter
     write_indent
 
     if check_simple_key?(event)
-      @states.push(State::BLOCK_MAPPING_SIMPLE_VALUE)
-      emit_node(event, false, false, true, true)
+      emit_node(event, false, false, true, true, State::BLOCK_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, true)
-      @states.push(State::BLOCK_MAPPING_VALUE)
-      emit_node(event, false, false, true, false)
+      emit_node(event, false, false, true, false, State::BLOCK_MAPPING_VALUE)
     end
   end
 
@@ -506,49 +498,68 @@ class YAML::Emitter
       write_indent
       write_indicator(":", true, false, true)
     end
-    @states.push(State::BLOCK_MAPPING_KEY)
-    emit_node(event, false, false, true, false)
+    emit_node(event, false, false, true, false, State::BLOCK_MAPPING_KEY)
   end
 
-  # yaml_emitter_emit_node
+  # yaml_emitter_emit_node, with the state to return to (pushed by the
+  # caller in libyaml). A scalar or an alias sets it at once when done,
+  # instead of pushing it for its own pop, and pushes it only if it fails,
+  # which leaves the stack as libyaml's.
   @[AlwaysInline]
-  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
+  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool, next_state : State) : Nil
     @root_context = root
     @sequence_context = sequence
     @mapping_context = mapping
     @simple_key_context = simple_key
 
     case event.value.kind
-    when .alias?          then emit_alias
-    when .scalar?         then emit_scalar(event)
-    when .sequence_start? then emit_sequence_start(event)
-    when .mapping_start?  then emit_mapping_start(event)
+    when .alias?
+      emit_alias(next_state)
+    when .scalar?
+      emit_scalar(event, next_state)
+    when .sequence_start?
+      @states.push(next_state)
+      emit_sequence_start(event)
+    when .mapping_start?
+      @states.push(next_state)
+      emit_mapping_start(event)
     else
+      @states.push(next_state)
       error("expected SCALAR, SEQUENCE-START, MAPPING-START, or ALIAS")
     end
   end
 
   # yaml_emitter_emit_alias
-  private def emit_alias : Nil
-    process_anchor
-    put(' '.ord.to_u8) if @simple_key_context
-    @state = @states.pop
+  private def emit_alias(next_state : State) : Nil
+    begin
+      process_anchor
+      put(' '.ord.to_u8) if @simple_key_context
+    rescue ex
+      @states.push(next_state)
+      raise ex
+    end
+    @state = next_state
   end
 
   # yaml_emitter_emit_scalar. A simple plain scalar is written without the
   # increase_indent/pop pair around process_scalar: the indentation is only
   # read by line breaks, and it has none.
   @[AlwaysInline]
-  private def emit_scalar(event : Event*) : Nil
-    select_scalar_style(event)
-    process_anchor
-    process_tag
-    unless write_simple_plain?
-      increase_indent(true, false)
-      process_scalar
-      @indent = @indents.pop
+  private def emit_scalar(event : Event*, next_state : State) : Nil
+    begin
+      select_scalar_style(event)
+      process_anchor
+      process_tag
+      unless write_simple_plain?
+        increase_indent(true, false)
+        process_scalar
+        @indent = @indents.pop
+      end
+    rescue ex
+      @states.push(next_state)
+      raise ex
     end
-    @state = @states.pop
+    @state = next_state
   end
 
   # The usual case of process_scalar, inlined: a plain scalar of printable
