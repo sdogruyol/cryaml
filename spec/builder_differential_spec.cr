@@ -98,6 +98,34 @@ private module BuildScripts
     end
   end
 
+  # Anchors and tags containing NUL, which libyaml truncates there.
+  NUL = [
+    "stream_start\ndoc_start implicit\nseq_start BLOCK - -\nscalar ANY a\\u{0}b - x\nalias a\\u{0}b\nseq_end\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nseq_start BLOCK - -\nseq_start FLOW a\\u{0}b -\nseq_end\nalias a\\u{0}c\nseq_end\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nmap_start BLOCK a\\u{0}b -\nscalar ANY - - k\nscalar ANY - - v\nmap_end\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nscalar ANY \\u{0}a - x\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nscalar ANY - !a\\u{0}b x\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nscalar ANY - tag:yaml.org,2002:str\\u{0}x x\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nseq_start BLOCK - !s\\u{0}q\nseq_end\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nmap_start FLOW - !m\\u{0}p\nmap_end\ndoc_end\nstream_end",
+    "stream_start\ndoc_start implicit\nscalar ANY - \\u{0}! x\ndoc_end\nstream_end",
+  ]
+
+  # Scalars whose first space falls around the best width (80 columns),
+  # in every style that breaks lines at spaces.
+  def self.width_scripts : Array({String, String})
+    scripts = [] of {String, String}
+    (77..82).each do |n|
+      %w(PLAIN SINGLE_QUOTED DOUBLE_QUOTED FOLDED).each do |style|
+        {"root" => {"", ""}, "block-seq" => {"seq_start BLOCK - -\n", "\nseq_end"}}.each do |context, (before, after)|
+          script = "stream_start\ndoc_start implicit\n#{before}scalar #{style} - - #{"a" * n}\\sb\\sc\\sd#{after}\ndoc_end\nstream_end"
+          scripts << {"width-#{n}-#{style}-#{context}", script}
+        end
+      end
+    end
+    scripts
+  end
+
   # Every value in every scalar style in every position the emitter treats
   # differently: document root, block and flow sequence items, block and
   # flow mapping keys and values.
@@ -135,6 +163,12 @@ describe "builder differential (cryaml vs libyaml)" do
   end
   BuildScripts.odd_byte_scripts.each_with_index do |script, i|
     cases << Differential::Case.new("odd-bytes-#{i}", "build", script)
+  end
+  BuildScripts::NUL.each_with_index do |script, i|
+    cases << Differential::Case.new("nul-#{i}", "build", script)
+  end
+  BuildScripts.width_scripts.each do |name, script|
+    cases << Differential::Case.new(name, "build", script)
   end
   BuildScripts.matrix_scripts.each do |name, script|
     cases << Differential::Case.new(name, "build", script)

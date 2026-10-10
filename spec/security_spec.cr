@@ -74,6 +74,29 @@ describe "hostile input" do
       end
       YAML.parse(input)["k199"]["x"].should eq(1)
     end
+
+    # An anchor's cost is the number of aliases inside it, not the number
+    # seen before it: `&c` holds 10 aliases, and 20 more precede it. With
+    # n aliases of `*c` the document has 30 + 11n aliases and 32 + n anchors
+    # (aliases count as anchors), so n = 290 is the last accepted. Expected
+    # results recorded from the stdlib's libyaml binding (Crystal 1.21).
+    alias_limit = ->(n : Int32) do
+      String.build do |io|
+        io << "s: &s x\nl: [" << (["*s"] * 20).join(", ") << "]\n"
+        io << "c: &c [" << (["*s"] * 10).join(", ") << "]\n"
+        io << "r: [" << (["*c"] * n).join(", ") << "]\n"
+      end
+    end
+
+    it "accepts aliasing right at the alias/anchor limit" do
+      YAML.parse(alias_limit.call(290))["r"].as_a.size.should eq(290)
+    end
+
+    it "rejects aliasing one alias past the limit" do
+      expect_raises(YAML::ParseException, "Document contains excessive aliasing at line 4, column 1165") do
+        YAML.parse(alias_limit.call(291))
+      end
+    end
   end
 
   describe "large scalars and long lines" do
