@@ -1040,8 +1040,53 @@ class YAML::Scanner < YAML::Reader
     b > 0x20 && b < 0x80 && b != quote && (single || b != '\\'.ord)
   end
 
+  # The run of characters at the current position that a quoted scalar on
+  # one line takes as they are: `#quoted_run` with spaces, while four more
+  # characters stay decoded.
+  @[AlwaysInline]
+  private def quoted_line_run(single : Bool) : Int32
+    p = pointer
+    limit = @unread &- 4
+    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
+    n = 0
+    while n &+ 8 <= limit
+      word = Chars.load_word(p + n)
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x20) | Chars.equal_mask(word, quote)
+      stop |= Chars.equal_mask(word, '\\'.ord.to_u8) unless single
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit
+      b = p[n]
+      break unless b >= 0x20 && b < 0x80 && b != quote && (single || b != '\\'.ord)
+      n &+= 1
+    end
+    n
+  end
+
   # yaml_parser_scan_flow_scalar
   private def scan_flow_scalar(single : Bool) : Token
+    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
+
+    start_mark = mark
+    skip
+
+    # Fast path: a quoted scalar on one line without escapes is the input
+    # between its quotes, which the loop below copies to `string` piece by
+    # piece (spaces through `whitespaces`). With four characters to spare
+    # after the closing quote every `CACHE` of the loop is a no-op, so the
+    # value can be taken from the input at once.
+    if verbatim_input?
+      n = quoted_line_run(single)
+      if n &+ 4 <= @unread && byte(n) == quote && !(single && check?('\'', n &+ 1))
+        start = input_offset
+        skip_ascii(n)
+        skip
+        return Token.new(TokenKind::SCALAR, start_mark, mark, value: input_to_s(start, start &+ n, n),
+          style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
+      end
+    end
+
     string = @string
     leading_break = @leading_break
     trailing_breaks = @trailing_breaks
@@ -1050,11 +1095,6 @@ class YAML::Scanner < YAML::Reader
     leading_break.clear
     trailing_breaks.clear
     whitespaces.clear
-
-    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
-
-    start_mark = mark
-    skip
 
     while true
       cache(4)
