@@ -83,11 +83,30 @@ class YAML::Emitter
     @pos = 0
   end
 
-  # yaml_emitter_emit
-  def emit(event : Event) : Bool
-    @events << event
+  # yaml_emitter_emit. *event* is only read during the call; the queue keeps
+  # a copy. Like libyaml, the functions below take a pointer to the event
+  # (`yaml_event_t *`): *event* itself, or the head of the queue.
+  def emit(event : Event*) : Bool
+    # Fast path: with nothing queued, an event that needs no lookahead (all
+    # but DOCUMENT-START, SEQUENCE-START and MAPPING-START) would be queued
+    # and then processed and dequeued at once by the loop below; skip the
+    # queue.
+    if @events.empty? && !lookahead?(event.value.kind)
+      begin
+        analyze_event(event)
+        state_machine(event)
+      rescue Failure
+        # libyaml leaves the failed event at the head of the queue.
+        @events << event.value
+        return false
+      end
+      return true
+    end
+
+    @events << event.value
     until need_more_events?
-      head = @events.first
+      # The state machine reads the queue but doesn't modify it.
+      head = @events.first_pointer
       analyze_event(head)
       state_machine(head)
       @events.shift
@@ -95,6 +114,12 @@ class YAML::Emitter
     true
   rescue Failure
     false
+  end
+
+  # Whether `need_more_events?` may wait for more events after *kind*.
+  @[AlwaysInline]
+  private def lookahead?(kind : EventKind) : Bool
+    kind.document_start? || kind.sequence_start? || kind.mapping_start?
   end
 
   # yaml_emitter_flush (writer.c). Like libyaml, the buffer is reset before
@@ -162,7 +187,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_state_machine
-  private def state_machine(event : Event) : Nil
+  private def state_machine(event : Event*) : Nil
     case @state
     in .stream_start?               then emit_stream_start(event)
     in .first_document_start?       then emit_document_start(event, true)
@@ -186,9 +211,9 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_stream_start
-  private def emit_stream_start(event : Event) : Nil
+  private def emit_stream_start(event : Event*) : Nil
     @open_ended = 0
-    if event.kind.stream_start?
+    if event.value.kind.stream_start?
       @best_indent = 2 if @best_indent < 2 || @best_indent > 9
       @best_width = 80 if @best_width >= 0 && @best_width <= @best_indent * 2
       @best_width = Int32::MAX if @best_width < 0
@@ -203,10 +228,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_document_start
-  private def emit_document_start(event : Event, first : Bool) : Nil
-    if event.kind.document_start?
-      version = event.version_directive
-      directives = event.tag_directives
+  private def emit_document_start(event : Event*, first : Bool) : Nil
+    if event.value.kind.document_start?
+      version = event.value.version_directive
+      directives = event.value.tag_directives
       has_directives = !directives.nil? && !directives.empty?
 
       analyze_version_directive(version) if version
@@ -216,7 +241,7 @@ class YAML::Emitter
       end
       DEFAULT_TAG_DIRECTIVES.each { |directive| append_tag_directive(directive, true) }
 
-      implicit = event.implicit?
+      implicit = event.value.implicit?
       implicit = false if !first || @canonical
 
       if (version || has_directives) && @open_ended != 0
@@ -253,7 +278,7 @@ class YAML::Emitter
       @state = State::DOCUMENT_CONTENT
       @open_ended = 0
       return
-    elsif event.kind.stream_end?
+    elsif event.value.kind.stream_end?
       # This can happen if a block scalar with trailing empty lines
       # is at the end of the stream.
       if @open_ended == 2
@@ -269,16 +294,16 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_document_content
-  private def emit_document_content(event : Event) : Nil
+  private def emit_document_content(event : Event*) : Nil
     @states.push(State::DOCUMENT_END)
     emit_node(event, true, false, false, false)
   end
 
   # yaml_emitter_emit_document_end
-  private def emit_document_end(event : Event) : Nil
-    if event.kind.document_end?
+  private def emit_document_end(event : Event*) : Nil
+    if event.value.kind.document_end?
       write_indent
-      if !event.implicit?
+      if !event.value.implicit?
         write_indicator("...", true, false, false)
         @open_ended = 0
         write_indent
@@ -294,14 +319,14 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_sequence_item
-  private def emit_flow_sequence_item(event : Event, first : Bool) : Nil
+  private def emit_flow_sequence_item(event : Event*, first : Bool) : Nil
     if first
       write_indicator("[", true, true, false)
       increase_indent(true, false)
       @flow_level += 1
     end
 
-    if event.kind.sequence_end?
+    if event.value.kind.sequence_end?
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
@@ -320,14 +345,14 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_mapping_key
-  private def emit_flow_mapping_key(event : Event, first : Bool) : Nil
+  private def emit_flow_mapping_key(event : Event*, first : Bool) : Nil
     if first
       write_indicator("{", true, true, false)
       increase_indent(true, false)
       @flow_level += 1
     end
 
-    if event.kind.mapping_end?
+    if event.value.kind.mapping_end?
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
@@ -342,7 +367,7 @@ class YAML::Emitter
     write_indicator(",", false, false, false) unless first
     write_indent if @canonical || @column > @best_width
 
-    if !@canonical && check_simple_key?
+    if !@canonical && check_simple_key?(event)
       @states.push(State::FLOW_MAPPING_SIMPLE_VALUE)
       emit_node(event, false, false, true, true)
     else
@@ -353,7 +378,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_mapping_value
-  private def emit_flow_mapping_value(event : Event, simple : Bool) : Nil
+  private def emit_flow_mapping_value(event : Event*, simple : Bool) : Nil
     if simple
       write_indicator(":", false, false, false)
     else
@@ -365,10 +390,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_sequence_item
-  private def emit_block_sequence_item(event : Event, first : Bool) : Nil
+  private def emit_block_sequence_item(event : Event*, first : Bool) : Nil
     increase_indent(false, @mapping_context && !@indention) if first
 
-    if event.kind.sequence_end?
+    if event.value.kind.sequence_end?
       @indent = @indents.pop
       @state = @states.pop
       return
@@ -381,10 +406,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_mapping_key
-  private def emit_block_mapping_key(event : Event, first : Bool) : Nil
+  private def emit_block_mapping_key(event : Event*, first : Bool) : Nil
     increase_indent(false, false) if first
 
-    if event.kind.mapping_end?
+    if event.value.kind.mapping_end?
       @indent = @indents.pop
       @state = @states.pop
       return
@@ -392,7 +417,7 @@ class YAML::Emitter
 
     write_indent
 
-    if check_simple_key?
+    if check_simple_key?(event)
       @states.push(State::BLOCK_MAPPING_SIMPLE_VALUE)
       emit_node(event, false, false, true, true)
     else
@@ -403,7 +428,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_mapping_value
-  private def emit_block_mapping_value(event : Event, simple : Bool) : Nil
+  private def emit_block_mapping_value(event : Event*, simple : Bool) : Nil
     if simple
       write_indicator(":", false, false, false)
     else
@@ -414,15 +439,15 @@ class YAML::Emitter
     emit_node(event, false, false, true, false)
   end
 
-  # yaml_emitter_emit_node (inlined: the event is not copied for the call)
+  # yaml_emitter_emit_node
   @[AlwaysInline]
-  private def emit_node(event : Event, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
+  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
     @root_context = root
     @sequence_context = sequence
     @mapping_context = mapping
     @simple_key_context = simple_key
 
-    case event.kind
+    case event.value.kind
     when .alias?          then emit_alias
     when .scalar?         then emit_scalar(event)
     when .sequence_start? then emit_sequence_start(event)
@@ -440,7 +465,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_scalar
-  private def emit_scalar(event : Event) : Nil
+  private def emit_scalar(event : Event*) : Nil
     select_scalar_style(event)
     process_anchor
     process_tag
@@ -451,10 +476,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_sequence_start
-  private def emit_sequence_start(event : Event) : Nil
+  private def emit_sequence_start(event : Event*) : Nil
     process_anchor
     process_tag
-    if @flow_level > 0 || @canonical || event.sequence_style.flow? || check_empty_sequence?
+    if @flow_level > 0 || @canonical || event.value.sequence_style.flow? || check_empty_sequence?
       @state = State::FLOW_SEQUENCE_FIRST_ITEM
     else
       @state = State::BLOCK_SEQUENCE_FIRST_ITEM
@@ -462,10 +487,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_mapping_start
-  private def emit_mapping_start(event : Event) : Nil
+  private def emit_mapping_start(event : Event*) : Nil
     process_anchor
     process_tag
-    if @flow_level > 0 || @canonical || event.mapping_style.flow? || check_empty_mapping?
+    if @flow_level > 0 || @canonical || event.value.mapping_style.flow? || check_empty_mapping?
       @state = State::FLOW_MAPPING_FIRST_KEY
     else
       @state = State::BLOCK_MAPPING_FIRST_KEY
@@ -484,10 +509,11 @@ class YAML::Emitter
     @events[0].kind.mapping_start? && @events[1].kind.mapping_end?
   end
 
-  # yaml_emitter_check_simple_key
-  private def check_simple_key? : Bool
+  # yaml_emitter_check_simple_key. *event* is the event being emitted: the
+  # head of the queue, or not queued at all (see `#emit`).
+  private def check_simple_key?(event : Event*) : Bool
     length = 0_i64
-    case @events.first.kind
+    case event.value.kind
     when .alias?
       length += @anchor_length
     when .scalar?
@@ -506,11 +532,11 @@ class YAML::Emitter
   end
 
   # yaml_emitter_select_scalar_style
-  private def select_scalar_style(event : Event) : Nil
-    style = event.scalar_style
+  private def select_scalar_style(event : Event*) : Nil
+    style = event.value.scalar_style
     no_tag = @tag_handle.null? && @tag_suffix.null?
 
-    if no_tag && !event.plain_implicit? && !event.quoted_implicit?
+    if no_tag && !event.value.plain_implicit? && !event.value.quoted_implicit?
       error("neither tag nor implicit flags are specified")
     end
 
@@ -525,7 +551,7 @@ class YAML::Emitter
       if @scalar_length == 0 && (@flow_level > 0 || @simple_key_context)
         style = ScalarStyle::SINGLE_QUOTED
       end
-      style = ScalarStyle::SINGLE_QUOTED if no_tag && !event.plain_implicit?
+      style = ScalarStyle::SINGLE_QUOTED if no_tag && !event.value.plain_implicit?
     end
 
     if style.single_quoted?
@@ -538,7 +564,7 @@ class YAML::Emitter
       end
     end
 
-    if no_tag && !event.quoted_implicit? && !style.plain?
+    if no_tag && !event.value.quoted_implicit? && !style.plain?
       @tag_handle = "!".to_unsafe
       @tag_handle_length = 1
     end
@@ -821,7 +847,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_analyze_event
-  private def analyze_event(event : Event) : Nil
+  private def analyze_event(event : Event*) : Nil
     @anchor = Pointer(UInt8).null
     @anchor_length = 0
     @tag_handle = Pointer(UInt8).null
@@ -831,22 +857,23 @@ class YAML::Emitter
     @scalar_value = Pointer(UInt8).null
     @scalar_length = 0
 
-    case event.kind
+    case event.value.kind
     when .alias?
-      analyze_anchor(event.anchor || "", true)
+      analyze_anchor(event.value.anchor || "", true)
     when .scalar?
-      if anchor = event.anchor
+      if anchor = event.value.anchor
         analyze_anchor(anchor, false)
       end
-      if (tag = event.tag) && (@canonical || (!event.plain_implicit? && !event.quoted_implicit?))
+      if (tag = event.value.tag) && (@canonical || (!event.value.plain_implicit? && !event.value.quoted_implicit?))
         analyze_tag(tag)
       end
-      analyze_scalar(event.value.to_unsafe, event.value.bytesize)
+      value = event.value.value
+      analyze_scalar(value.to_unsafe, value.bytesize)
     when .sequence_start?, .mapping_start?
-      if anchor = event.anchor
+      if anchor = event.value.anchor
         analyze_anchor(anchor, false)
       end
-      if (tag = event.tag) && (@canonical || !event.implicit?)
+      if (tag = event.value.tag) && (@canonical || !event.value.implicit?)
         analyze_tag(tag)
       end
     else

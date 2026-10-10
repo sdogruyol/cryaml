@@ -193,6 +193,9 @@ class YAML::Builder
     end
   end
 
+  # Inlined, so *event* is the caller's local and the emitter reads it in
+  # place instead of from a copy.
+  @[AlwaysInline]
   private def emit(event_name : String, event : Event) : Nil
     # libyaml's event constructors reject malformed UTF-8 (`yaml_check_utf8`).
     # The libyaml binding ignored that failure and re-emitted a stale event,
@@ -201,7 +204,7 @@ class YAML::Builder
       raise YAML::Error.new("Error emitting #{event_name}: invalid UTF-8 string")
     end
 
-    unless @emitter.emit(event)
+    unless @emitter.emit(pointerof(event))
       raise YAML::Error.new("Error emitting #{event_name}: #{@emitter.problem}")
     end
   end

@@ -31,6 +31,14 @@ class YAML::Queue(T)
     @buffer[@head]
   end
 
+  # The item at the head of the queue, in place: valid until the queue is
+  # next modified.
+  @[AlwaysInline]
+  def first_pointer : Pointer(T)
+    raise IndexError.new if empty?
+    @buffer + @head
+  end
+
   # The item *index* positions after the head.
   @[AlwaysInline]
   def [](index : Int32) : T
