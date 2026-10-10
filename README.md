@@ -91,8 +91,9 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for what was found along the way.
 
 **Tested where Crystal runs.** Linux x86_64 and aarch64, macOS arm64 and
 x86_64, Windows (MSVC and MinGW-w64), Alpine with a static binary, the
-interpreter and wasm32-wasi, on every push. The ameba and crystal-i18n test
-suites and shards' unit specs pass on cryaml, unmodified.
+interpreter and wasm32-wasi, on every push. The test suites of 22 projects
+that use YAML (shards, ameba, Lucky, Amber, Mint, Invidious, noir, ...) give
+the same results on cryaml as on the stdlib, unmodified.
 
 **Hostile input.** The parser is an explicit state machine, so nesting depth
 never touches the call stack; `YAML.parse` stops at 512 levels like the

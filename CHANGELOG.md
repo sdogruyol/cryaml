@@ -43,6 +43,8 @@ Differential tests against libyaml 0.2.5 (yaml-test-suite, edge cases,
 real-world files, 3,805 `Builder` scripts), Crystal's `spec/std/yaml` for
 1.21.0, latest and nightly, a line-by-line review against libyaml's C
 source, about 1.2 billion fuzzed cases, valgrind memcheck, kcov coverage,
-and the test suites of shards, ameba, crystal-i18n, totem and Invidious.
+and the test suites of 22 projects that use YAML (shards, ameba, Lucky,
+Amber, Mint, Invidious, noir, hwaro, ...) with results identical to the
+stdlib's.
 CI covers Linux, macOS, Windows (MSVC, MinGW-w64), Alpine, the interpreter
 and wasm32-wasi. See docs/ROADMAP.md.
