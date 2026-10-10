@@ -143,7 +143,7 @@ class YAML::Emitter
       head = @events.first_pointer
       analyze_event(head)
       state_machine(head)
-      @events.shift
+      dequeue_event
     end
     true
   rescue Failure
@@ -157,6 +157,20 @@ class YAML::Emitter
   @[AlwaysInline]
   private def processed_at_once?(kind : EventKind) : Bool
     @events.empty? && !lookahead?(kind)
+  end
+
+  # DEQUEUE of the head event. Its slot is overwritten when it is reused;
+  # until then only the references it holds are cleared, so their strings
+  # can be collected (libyaml frees each dequeued event). Each is a single
+  # pointer (a nilable reference is one, `nil` being null), stored as null
+  # like `Pointer#clear` would.
+  @[AlwaysInline]
+  private def dequeue_event : Nil
+    head = @events.first_pointer.as(Pointer(UInt8))
+    {% for field in %w(@tag_directives @anchor @tag @value) %}
+      (head + offsetof(Event, {{field.id}})).as(Pointer(Pointer(Void))).value = Pointer(Void).null
+    {% end %}
+    @events.shift_keeping_slot
   end
 
   # Whether `need_more_events?` may wait for more events after *kind*.
