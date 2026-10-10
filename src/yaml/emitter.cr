@@ -1005,7 +1005,13 @@ class YAML::Emitter
   # it stays below `@capacity`.
   @[AlwaysInline]
   private def flush_if_needed : Nil
-    return if @pos < @write_limit
+    make_room unless @pos < @write_limit
+  end
+
+  # The rest of FLUSH, out of line: it runs about once per 16 KiB of output,
+  # and FLUSH is inlined into every PUT and WRITE.
+  @[NoInline]
+  private def make_room : Nil
     grow_buffer
     flush unless @pos < @write_limit
   end
