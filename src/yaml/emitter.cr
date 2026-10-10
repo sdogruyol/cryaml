@@ -205,7 +205,8 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_state_machine
+  # yaml_emitter_state_machine (inlined: a jump table)
+  @[AlwaysInline]
   private def state_machine(event : Event*) : Nil
     case @state
     in .stream_start?               then emit_stream_start(event)
