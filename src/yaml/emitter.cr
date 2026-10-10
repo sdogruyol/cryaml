@@ -272,21 +272,9 @@ class YAML::Emitter
       end
       @open_ended = 0
 
-      if version
+      if version || has_directives
         implicit = false
-        write_indicator("%YAML", true, false, false)
-        write_indicator(version[1] == 1 ? "1.1" : "1.2", true, false, false)
-        write_indent
-      end
-
-      if directives && has_directives
-        implicit = false
-        directives.each do |directive|
-          write_indicator("%TAG", true, false, false)
-          write_tag_handle(directive[0].to_unsafe, directive[0].bytesize)
-          write_tag_content(directive[1].to_unsafe, directive[1].bytesize, true)
-          write_indent
-        end
+        write_directives(version, directives)
       end
 
       # yaml_emitter_check_empty_document always returns 0.
@@ -313,6 +301,24 @@ class YAML::Emitter
       return
     end
     error("expected DOCUMENT-START or STREAM-END")
+  end
+
+  # The %YAML and %TAG lines of yaml_emitter_emit_document_start, out of
+  # line: directives are rare.
+  @[NoInline]
+  private def write_directives(version : {Int32, Int32}?, directives : Array({String, String})?) : Nil
+    if version
+      write_indicator("%YAML", true, false, false)
+      write_indicator(version[1] == 1 ? "1.1" : "1.2", true, false, false)
+      write_indent
+    end
+
+    directives.try &.each do |directive|
+      write_indicator("%TAG", true, false, false)
+      write_tag_handle(directive[0].to_unsafe, directive[0].bytesize)
+      write_tag_content(directive[1].to_unsafe, directive[1].bytesize, true)
+      write_indent
+    end
   end
 
   # yaml_emitter_emit_document_content
@@ -1343,7 +1349,8 @@ class YAML::Emitter
 
   # The escape branch of yaml_emitter_write_double_quoted_scalar, out of
   # line: escapes are rare. Writes the character at p+i as an escape
-  # sequence and returns the index after it.
+  # sequence and returns the index after it. libyaml PUTs the letter in each
+  # branch; here the branches pick it (0 for none) and one PUT writes it.
   @[NoInline]
   private def write_escape(p : Pointer(UInt8), i : Int32) : Int32
     octet = p[i]
@@ -1358,22 +1365,26 @@ class YAML::Emitter
 
     put('\\'.ord.to_u8)
 
-    case value
-    when   0x00 then put('0'.ord.to_u8)
-    when   0x07 then put('a'.ord.to_u8)
-    when   0x08 then put('b'.ord.to_u8)
-    when   0x09 then put('t'.ord.to_u8)
-    when   0x0A then put('n'.ord.to_u8)
-    when   0x0B then put('v'.ord.to_u8)
-    when   0x0C then put('f'.ord.to_u8)
-    when   0x0D then put('r'.ord.to_u8)
-    when   0x1B then put('e'.ord.to_u8)
-    when   0x22 then put('"'.ord.to_u8)
-    when   0x5C then put('\\'.ord.to_u8)
-    when   0x85 then put('N'.ord.to_u8)
-    when   0xA0 then put('_'.ord.to_u8)
-    when 0x2028 then put('L'.ord.to_u8)
-    when 0x2029 then put('P'.ord.to_u8)
+    letter = case value
+             when   0x00 then '0'
+             when   0x07 then 'a'
+             when   0x08 then 'b'
+             when   0x09 then 't'
+             when   0x0A then 'n'
+             when   0x0B then 'v'
+             when   0x0C then 'f'
+             when   0x0D then 'r'
+             when   0x1B then 'e'
+             when   0x22 then '"'
+             when   0x5C then '\\'
+             when   0x85 then 'N'
+             when   0xA0 then '_'
+             when 0x2028 then 'L'
+             when 0x2029 then 'P'
+             else              '\0'
+             end
+    if letter != '\0'
+      put(letter.ord.to_u8)
     else
       if value <= 0xFF
         put('x'.ord.to_u8)

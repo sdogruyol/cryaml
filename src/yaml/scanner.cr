@@ -1127,29 +1127,31 @@ class YAML::Scanner < YAML::Reader
   end
 
   # The escape sequence part of yaml_parser_scan_flow_scalar, out of line:
-  # escapes are rare, and the hex digits and UTF-8 encoding of `\x`, `\u`
-  # and `\U` are a large part of the function.
+  # escapes are rare. libyaml appends the bytes of each escape in its own
+  # branch; here every branch yields a code point and one `write_utf8`
+  # appends the same bytes (`\N` is U+0085, C2 85 in UTF-8, and so on).
   @[NoInline]
   private def scan_escape(string : ByteBuffer, start_mark : Mark) : Nil
     code_length = 0
+    value = 0_u32
     case byte(1)
-    when '0'.ord           then string << 0_u8
-    when 'a'.ord           then string << 0x07_u8
-    when 'b'.ord           then string << 0x08_u8
-    when 't'.ord, '\t'.ord then string << 0x09_u8
-    when 'n'.ord           then string << 0x0A_u8
-    when 'v'.ord           then string << 0x0B_u8
-    when 'f'.ord           then string << 0x0C_u8
-    when 'r'.ord           then string << 0x0D_u8
-    when 'e'.ord           then string << 0x1B_u8
-    when ' '.ord           then string << 0x20_u8
-    when '"'.ord           then string << '"'
-    when '/'.ord           then string << '/'
-    when '\\'.ord          then string << '\\'
-    when 'N'.ord           then string << 0xC2_u8 << 0x85_u8
-    when '_'.ord           then string << 0xC2_u8 << 0xA0_u8
-    when 'L'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA8_u8
-    when 'P'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA9_u8
+    when '0'.ord           then value = 0x00_u32
+    when 'a'.ord           then value = 0x07_u32
+    when 'b'.ord           then value = 0x08_u32
+    when 't'.ord, '\t'.ord then value = 0x09_u32
+    when 'n'.ord           then value = 0x0A_u32
+    when 'v'.ord           then value = 0x0B_u32
+    when 'f'.ord           then value = 0x0C_u32
+    when 'r'.ord           then value = 0x0D_u32
+    when 'e'.ord           then value = 0x1B_u32
+    when ' '.ord           then value = 0x20_u32
+    when '"'.ord           then value = 0x22_u32
+    when '/'.ord           then value = 0x2F_u32
+    when '\\'.ord          then value = 0x5C_u32
+    when 'N'.ord           then value = 0x85_u32
+    when '_'.ord           then value = 0xA0_u32
+    when 'L'.ord           then value = 0x2028_u32
+    when 'P'.ord           then value = 0x2029_u32
     when 'x'.ord           then code_length = 2
     when 'u'.ord           then code_length = 4
     when 'U'.ord           then code_length = 8
@@ -1162,7 +1164,6 @@ class YAML::Scanner < YAML::Reader
     skip
 
     if code_length != 0
-      value = 0_u32
       cache(code_length)
       k = 0
       while k < code_length
@@ -1178,14 +1179,14 @@ class YAML::Scanner < YAML::Reader
         scanner_error("while parsing a quoted scalar", start_mark,
           "found invalid Unicode character escape code")
       end
+    end
 
-      string.write_utf8(value)
+    string.write_utf8(value)
 
-      k = 0
-      while k < code_length
-        skip
-        k += 1
-      end
+    k = 0
+    while k < code_length
+      skip
+      k += 1
     end
   end
 
