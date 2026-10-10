@@ -3,21 +3,27 @@
 # `require "cryaml"` loads `src/yaml.cr`, the drop-in replacement for the
 # stdlib's `yaml.cr`. Only the check below is specific to the shard.
 
-# The stdlib's `require "yaml"` defines the same YAML module, so loading both
-# never compiles. When the stdlib came first, say why instead of failing on a
-# duplicate definition. (When cryaml comes first, the stdlib fails with
-# "alias Type is already defined" in `yaml/any.cr`.)
-{% if @top_level.has_constant?("LibYAML") %}
-  {% raise <<-MSG
-    cryaml: the stdlib's `require "yaml"` was loaded before `require "cryaml"`.
-
-    Both define the YAML module and can't be used together. Replace
-    `require "yaml"` with `require "cryaml"`, and `big/yaml`, `uri/yaml`,
-    `uuid/yaml` with `cryaml/big`, `cryaml/uri`, `cryaml/uuid`. For
-    dependencies you can't edit, see "Dependencies that require yaml" in
-    cryaml's README.
-    MSG
-  %}
-{% end %}
-
 require "./yaml"
+
+# The stdlib's `require "yaml"` (also pulled in by `big/yaml`, `uri/yaml` and
+# `uuid/yaml`) defines the same YAML module. Loaded after cryaml it would
+# compile, because both load the same Any/Nodes/schema files, and its
+# `PullParser` and `Builder` methods would silently replace cryaml's and link
+# libyaml. A `finished` hook runs after every file is loaded, so this check
+# catches either order.
+module YAML
+  macro finished
+    {% if @top_level.has_constant?("LibYAML") %}
+      {% raise <<-MSG
+        cryaml: the stdlib's `yaml` is loaded together with `require "cryaml"`.
+
+        Both define the YAML module and can't be used together. Replace
+        `require "yaml"` with `require "cryaml"`, and `big/yaml`, `uri/yaml`,
+        `uuid/yaml` with `cryaml/big`, `cryaml/uri`, `cryaml/uuid`. For
+        dependencies you can't edit, see "Dependencies that require yaml" in
+        cryaml's README.
+        MSG
+      %}
+    {% end %}
+  end
+end

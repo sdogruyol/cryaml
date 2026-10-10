@@ -20,7 +20,7 @@ class URI
   # Serializes this URI to YAML, represented as a string.
   #
   # ```
-  # require "uri/yaml"
+  # require "cryaml/uri"
   #
   # URI.parse("http://example.com").to_yaml # => "--- http://example.com\n"
   # ```

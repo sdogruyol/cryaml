@@ -193,10 +193,10 @@ require "cryaml/uuid" # UUID
 ### Dependencies that require yaml
 
 A program can't load both cryaml and the stdlib's `yaml`: they define the
-same module, so the build fails. If a shard you depend on says
-`require "yaml"` (directly or through `uuid/yaml` and friends), put cryaml's
-shim directory first in `CRYSTAL_PATH`. Every `require "yaml"` then loads
-cryaml, with no source changes:
+same module, so cryaml stops the build whichever comes first. If a shard you
+depend on says `require "yaml"` (directly or through `uuid/yaml` and
+friends), put cryaml's shim directory first in `CRYSTAL_PATH`. Every
+`require "yaml"` then loads cryaml, with no source changes:
 
 ```sh
 CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)" crystal build src/app.cr

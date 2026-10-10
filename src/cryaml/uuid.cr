@@ -38,7 +38,7 @@ struct UUID
 
   # Returns `UUID` as YAML value.
   #
-  # NOTE: `require "uuid/yaml"` is required to opt-in to this feature.
+  # NOTE: `require "cryaml/uuid"` is required to opt-in to this feature.
   #
   # ```
   # uuid = UUID.new("50a11da6-377b-4bdf-b9f0-076f9db61c93")

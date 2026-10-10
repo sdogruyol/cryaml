@@ -210,6 +210,17 @@ jobs:
             echo "binary links libyaml" >&2
             exit 1
           fi
+      - name: Loading the stdlib's yaml next to cryaml fails, in either order
+        run: |
+          cd /tmp/app
+          for order in 'require "cryaml"\nrequire "uuid/yaml"' 'require "yaml"\nrequire "cryaml"'; do
+            printf "$order\nputs YAML.parse(%%(a: 1))\n" > mixed.cr
+            if crystal build mixed.cr -o mixed > mixed.log 2>&1; then
+              echo "mixed requires compiled:" >&2; cat mixed.cr >&2
+              exit 1
+            fi
+            grep -q "cryaml: the stdlib's \`yaml\` is loaded together" mixed.log || { cat mixed.log >&2; exit 1; }
+          done
 
   # cryaml loads the stdlib's own YAML layers. Check that the files it
   # replaces haven't changed upstream, then run the stdlib's YAML specs of
