@@ -62,6 +62,22 @@ class YAML::Queue(T)
     item
   end
 
+  # DEQUEUE without clearing the slot, like libyaml's `SKIP_TOKEN`: the
+  # slot keeps the item until it is reused (the queue starts over at the
+  # front whenever it empties). For the scanner, whose tokens hand their
+  # strings on to events anyway.
+  @[AlwaysInline]
+  def shift_keeping_slot : T
+    raise IndexError.new if empty?
+    item = @buffer[@head]
+    @head &+= 1
+    if @head == @tail
+      @head = 0
+      @tail = 0
+    end
+    item
+  end
+
   # ENQUEUE
   @[AlwaysInline]
   def <<(item : T) : self

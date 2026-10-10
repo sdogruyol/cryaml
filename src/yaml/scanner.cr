@@ -75,8 +75,7 @@ class YAML::Scanner < YAML::Reader
   @[AlwaysInline]
   def skip_token : Nil
     @tokens_parsed &+= 1
-    token = @tokens.shift
-    @stream_end_produced = token.kind.stream_end?
+    @stream_end_produced = @tokens.shift_keeping_slot.kind.stream_end?
     # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
     # `yaml_parser_fetch_more_tokens`. While tokens remain, that function
     # first checks for stale simple keys, which is a no-op: the position
