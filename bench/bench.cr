@@ -4,8 +4,11 @@
 #   crystal build --release -Dstdlib_yaml bench/bench.cr -o bin/bench-stdlib
 #
 # `bench/run.cr` builds both and prints the comparison. Run a binary directly
-# with `--json` for machine-readable output, or `--rss WORKLOAD OPERATION` to
-# measure the peak RSS of one workload in a fresh process.
+# with `--json` for machine-readable output, `--rss WORKLOAD OPERATION` to
+# measure the peak RSS of one workload in a fresh process, or
+# `--measure WORKLOAD OPERATION` to run one operation once inside
+# `measured_operation` with the GC disabled, for callgrind
+# (`scripts/instructions.sh`).
 {% if flag?(:stdlib_yaml) %}
   require "yaml"
 {% else %}
@@ -62,6 +65,11 @@ if ARGV[0]? == "--libyaml-version"
   exit
 end
 
+if ARGV[0]? == "--workloads"
+  BenchInputs.all.each { |entry| puts entry[0] }
+  exit
+end
+
 if ARGV[0]? == "--rss"
   name = ARGV[1]
   operation = ARGV[2]
@@ -70,6 +78,23 @@ if ARGV[0]? == "--rss"
   before = peak_rss_kb
   5.times { run_operation(operation, input, value) }
   puts({rss_kb: peak_rss_kb, baseline_kb: before}.to_json)
+  exit
+end
+
+# Not inlined, so callgrind can count exactly this call.
+@[NoInline]
+def measured_operation(operation : String, input : String, value : YAML::Any) : Nil
+  run_operation(operation, input, value)
+end
+
+if ARGV[0]? == "--measure"
+  name = ARGV[1]
+  operation = ARGV[2]
+  input = BenchInputs.all.find! { |entry| entry[0] == name }[1]
+  value = document_value(input)
+  run_operation(operation, input, value) # warm up lazily initialized state
+  GC.disable
+  measured_operation(operation, input, value)
   exit
 end
 
