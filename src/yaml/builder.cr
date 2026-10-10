@@ -201,7 +201,7 @@ class YAML::Builder
     # The libyaml binding ignored that failure and re-emitted a stale event,
     # which could crash the process; report it instead.
     unless utf8?(event.anchor) && utf8?(event.tag) && utf8?(event.value)
-      raise YAML::Error.new("Error emitting #{event_name}: invalid UTF-8 string")
+      emit_error(event_name, "invalid UTF-8 string")
     end
 
     slot = @emitter.event_slot
@@ -211,9 +211,13 @@ class YAML::Builder
     event.start_mark = slot.value.start_mark
     event.end_mark = slot.value.end_mark
     slot.value = event
-    unless @emitter.emit(slot)
-      raise YAML::Error.new("Error emitting #{event_name}: #{@emitter.problem}")
-    end
+    emit_error(event_name, @emitter.problem) unless @emitter.emit(slot)
+  end
+
+  # The errors of `#emit`, out of line: it is inlined into every event method.
+  @[NoInline]
+  private def emit_error(event_name : String, problem : String?) : NoReturn
+    raise YAML::Error.new("Error emitting #{event_name}: #{problem}")
   end
 
   # libyaml `yaml_check_utf8`: well-formed sequences without overlong forms.
