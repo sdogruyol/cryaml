@@ -462,10 +462,14 @@ class YAML::Scanner < YAML::Reader
       skip if @column == 0 && bom?
 
       cache(1)
-      # Fast path: `SKIP` + `CACHE(1)` repeated over a run of whitespace.
-      tabs = @flow_level != 0 || !@simple_key_allowed
-      n = ascii_run(1) { |b| b == ' '.ord || (tabs && b == '\t'.ord) }
+      # Fast path: `SKIP` + `CACHE(1)` repeated over a run of whitespace
+      # (spaces eight at a time, then tabs too where they are allowed).
+      n = space_run(1)
       skip_ascii(n) if n > 0
+      if check?('\t') && (@flow_level != 0 || !@simple_key_allowed)
+        n = ascii_run(1) { |b| b == ' '.ord || b == '\t'.ord }
+        skip_ascii(n) if n > 0
+      end
       while check?(' ') || ((@flow_level != 0 || !@simple_key_allowed) && check?('\t'))
         skip
         cache(1)
@@ -943,7 +947,7 @@ class YAML::Scanner < YAML::Reader
       cache(1)
       # Fast path: `SKIP` + `CACHE(1)` repeated over indentation spaces.
       room = indent == 0 ? Int32::MAX : Math.max(indent - @column, 0_i64).to_i32
-      n = ascii_run(1, room) { |b| b == ' '.ord }
+      n = space_run(1, room)
       skip_ascii(n) if n > 0
       while (indent == 0 || @column < indent) && space?
         skip

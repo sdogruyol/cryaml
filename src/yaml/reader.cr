@@ -232,6 +232,29 @@ class YAML::Reader
     n
   end
 
+  # `#ascii_run` for a run of spaces, eight bytes at a time: indentation is
+  # a large part of most YAML.
+  @[AlwaysInline]
+  def space_run(keep : Int32, max : Int32 = Int32::MAX) : Int32
+    p = pointer
+    limit = Math.min(@unread &- keep, max)
+    n = 0
+    # Every character takes at least one byte, so while at least eight more
+    # characters are allowed the next eight bytes are decoded.
+    while n &+ 8 <= limit
+      word = uninitialized UInt64
+      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
+      # Zero exactly in the bytes that are spaces.
+      other = word ^ 0x2020202020202020_u64
+      return n &+ zero_bytes_before(other) if other != 0
+      n &+= 8
+    end
+    while n < limit && p[n] == ' '.ord
+      n &+= 1
+    end
+    n
+  end
+
   # *count* times `SKIP` over ASCII characters (see `#ascii_run`).
   @[AlwaysInline]
   def skip_ascii(count : Int32) : Nil
@@ -533,18 +556,26 @@ class YAML::Reader
   end
 
   # Number of bytes, in memory order, before the first one flagged in a
-  # nonzero *mask*. The first byte is the lowest one on little-endian targets
-  # and the highest on big-endian ones. There a borrow or carry from a later
+  # nonzero *mask*. On big-endian targets a borrow or carry from a later
   # byte can also flag an earlier one, which only shortens the prefix: those
   # bytes then take the per-character path.
   @[AlwaysInline]
   private def printable_ascii_prefix(mask : UInt64) : Int32
+    zero_bytes_before(mask)
+  end
+
+  # Number of zero bytes, in memory order, before the first nonzero one of
+  # the nonzero *word* (eight bytes as loaded from memory). The first byte is
+  # the lowest one on little-endian targets and the highest on big-endian
+  # ones.
+  @[AlwaysInline]
+  private def zero_bytes_before(word : UInt64) : Int32
     # `IO::ByteFormat::SystemEndian` is always `LittleEndian` in Crystal 1.21,
     # so test the byte order directly; LLVM folds this to a constant.
     if 1_u16.unsafe_as(StaticArray(UInt8, 2))[0] == 1
-      mask.trailing_zeros_count.to_i32 // 8
+      word.trailing_zeros_count.to_i32 // 8
     else
-      mask.leading_zeros_count.to_i32 // 8
+      word.leading_zeros_count.to_i32 // 8
     end
   end
 
