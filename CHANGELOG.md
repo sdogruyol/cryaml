@@ -6,11 +6,11 @@
   adapted from Crystal's stdlib keep their license (see NOTICE.md).
 - The README says which stdlib version `src/yaml.cr`, `PullParser` and
   `Builder` are adapted from, and how to check a newer compiler for drift.
-- `to_yaml` (`Builder` and the emitter) runs 22-28% fewer instructions on
-  the benchmark documents: now 0.67x-0.79x the instructions of the libyaml
+- `to_yaml` (`Builder` and the emitter) runs fewer instructions on the
+  benchmark documents: now 0.59x-0.71x the instructions of the libyaml
   binding (was 0.94x-1.03x). The output buffer starts at 1 KB instead of
   16 KB, so `to_yaml` of a small document allocates 15 KB less; larger
-  outputs about 1 KB more.
+  outputs about 1 KB more. A `Builder` allocates 80 bytes less.
 
 ## 0.1.1 (2026-10-10)
 

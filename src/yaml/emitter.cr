@@ -43,7 +43,7 @@ class YAML::Emitter
   private class Failure < Exception
   end
 
-  private DEFAULT_TAG_DIRECTIVES = [{"!", "!"}, {"!!", "tag:yaml.org,2002:"}]
+  private DEFAULT_TAG_DIRECTIVES = { {"!", "!"}, {"!!", "tag:yaml.org,2002:"} }
 
   # Block scalar indentation indicators, indexed by `@best_indent` (2..9).
   private INDENT_HINTS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
@@ -58,7 +58,10 @@ class YAML::Emitter
   @states = Stack(State).new
   @events = Queue(Event).new
   @indents = Stack(Int32).new
-  @tag_directives = [] of {String, String}
+  # The current document's %TAG directives; the defaults are added by
+  # `#each_tag_directive` once `@default_tag_directives` is set.
+  @tag_directives : Array({String, String})? = nil
+  @default_tag_directives = false
   @indent = -1
   @flow_level = 0
   @root_context = false
@@ -88,9 +91,12 @@ class YAML::Emitter
   @single_quoted_allowed = false
   @block_allowed = false
   @scalar_style = ScalarStyle::ANY
-  # Not in libyaml: set by analyze_scalar when the scalar is one simple word
-  # (see `#simple_scalar`), which `#write_plain_word?` copies at once.
-  @ascii_word = false
+  # Not in libyaml: set by analyze_scalar when the scalar is printable
+  # ASCII without breaks and no flag but `flow_indicators` applies to it
+  # (see `#simple_scalar`), and whether it has spaces. `#write_simple_plain?`
+  # copies such a scalar at once.
+  @simple_scalar = false
+  @scalar_spaces = false
 
   def initialize(@io : IO)
     # `@buffer[0, @capacity]` is allocated; `@buffer[0, @pos]` is pending
@@ -102,14 +108,24 @@ class YAML::Emitter
     @pos = 0
   end
 
-  # yaml_emitter_emit. *event* is only read during the call; the queue keeps
-  # a copy. Like libyaml, the functions below take a pointer to the event
-  # (`yaml_event_t *`): *event* itself, or the head of the queue.
+  # Where the caller builds the next event before passing it to `#emit`:
+  # the free slot at the tail of the queue. libyaml's ENQUEUE copies the
+  # caller's event into the queue; building it in place saves copying the
+  # 128-byte struct. The slot's marks are zero: the queue's memory starts
+  # zeroed, and the events built in it (by `Builder`) have no marks.
+  @[AlwaysInline]
+  def event_slot : Event*
+    @events.tail_slot
+  end
+
+  # yaml_emitter_emit, for the event built at `#event_slot`. Like libyaml,
+  # the functions below take a pointer to the event (`yaml_event_t *`): the
+  # head of the queue, or (fast path) the free slot it would be queued in.
   def emit(event : Event*) : Bool
     # Fast path: with nothing queued, an event that needs no lookahead (all
     # but DOCUMENT-START, SEQUENCE-START and MAPPING-START) would be queued
-    # and then processed and dequeued at once by the loop below; skip the
-    # queue.
+    # and then processed and dequeued at once by the loop below; process it
+    # in its slot without queuing it.
     if @events.empty? && !lookahead?(event.value.kind)
       begin
         analyze_event(event)
@@ -117,24 +133,38 @@ class YAML::Emitter
       rescue ex
         # libyaml leaves the failed event at the head of the queue, also when
         # the IO raises during a flush, so the next call processes it again.
-        @events << event.value
+        @events.push_tail_slot
         raise ex unless ex.is_a?(Failure)
         return false
       end
       return true
     end
 
-    @events << event.value
+    @events.push_tail_slot
     until need_more_events?
       # The state machine reads the queue but doesn't modify it.
       head = @events.first_pointer
       analyze_event(head)
       state_machine(head)
-      @events.shift
+      dequeue_event
     end
     true
   rescue Failure
     false
+  end
+
+  # DEQUEUE of the head event. Its slot is overwritten when it is reused;
+  # until then only the references it holds are cleared, so their strings
+  # can be collected (libyaml frees each dequeued event). Each is a single
+  # pointer (a nilable reference is one, `nil` being null), stored as null
+  # like `Pointer#clear` would.
+  @[AlwaysInline]
+  private def dequeue_event : Nil
+    head = @events.first_pointer.as(Pointer(UInt8))
+    {% for field in %w(@tag_directives @anchor @tag @value) %}
+      (head + offsetof(Event, {{field.id}})).as(Pointer(Pointer(Void))).value = Pointer(Void).null
+    {% end %}
+    @events.shift_keeping_slot
   end
 
   # Whether `need_more_events?` may wait for more events after *kind*.
@@ -164,36 +194,55 @@ class YAML::Emitter
   # yaml_emitter_need_more_events
   private def need_more_events? : Bool
     return true if @events.empty?
-    accumulate = case @events.first.kind
+    head = @events.first_pointer
+    accumulate = case head.value.kind
                  when .document_start? then 1
                  when .sequence_start? then 2
                  when .mapping_start?  then 3
                  else                       return false
                  end
-    return false if @events.size > accumulate
-    level = 0
-    @events.each do |event|
-      case event.kind
+    size = @events.size
+    return false if size > accumulate
+    # The head starts a document or collection, so the level is 1 after it.
+    # The queued events are `head[0, size]`, at most 3, so neither `level`
+    # nor `i` can overflow.
+    level = 1
+    i = 1
+    while i < size
+      case head[i].kind
       when .stream_start?, .document_start?, .sequence_start?, .mapping_start?
-        level += 1
+        level &+= 1
       when .stream_end?, .document_end?, .sequence_end?, .mapping_end?
-        level -= 1
+        level &-= 1
       else
       end
       return false if level == 0
+      i &+= 1
     end
     true
   end
 
-  # yaml_emitter_append_tag_directive
-  private def append_tag_directive(value : {String, String}, allow_duplicates : Bool) : Nil
-    @tag_directives.each do |directive|
-      if directive[0] == value[0]
-        return if allow_duplicates
-        error("duplicate %TAG directive")
-      end
+  # yaml_emitter_append_tag_directive, for the document's own directives.
+  private def append_tag_directive(value : {String, String}) : Nil
+    directives = @tag_directives ||= [] of {String, String}
+    directives.each do |directive|
+      error("duplicate %TAG directive") if directive[0] == value[0]
     end
-    @tag_directives << value
+    directives << value
+  end
+
+  # The tag directives in effect, in libyaml's order: the document's own,
+  # then the default ones whose handle they don't take (libyaml appends
+  # those to the list with `allow_duplicates`; they aren't stored here, so
+  # most emitters never allocate the list).
+  private def each_tag_directive(& : {String, String} ->) : Nil
+    directives = @tag_directives
+    directives.try &.each { |directive| yield directive }
+    return unless @default_tag_directives
+    DEFAULT_TAG_DIRECTIVES.each do |default|
+      next if directives.try &.any? { |directive| directive[0] == default[0] }
+      yield default
+    end
   end
 
   # yaml_emitter_increase_indent
@@ -259,9 +308,9 @@ class YAML::Emitter
       analyze_version_directive(version) if version
       directives.try &.each do |directive|
         analyze_tag_directive(directive)
-        append_tag_directive(directive, false)
+        append_tag_directive(directive)
       end
-      DEFAULT_TAG_DIRECTIVES.each { |directive| append_tag_directive(directive, true) }
+      @default_tag_directives = true
 
       implicit = event.value.implicit?
       implicit = false if !first || @canonical
@@ -323,8 +372,7 @@ class YAML::Emitter
 
   # yaml_emitter_emit_document_content
   private def emit_document_content(event : Event*) : Nil
-    @states.push(State::DOCUMENT_END)
-    emit_node(event, true, false, false, false)
+    emit_node(event, true, false, false, false, State::DOCUMENT_END)
   end
 
   # yaml_emitter_emit_document_end
@@ -340,7 +388,8 @@ class YAML::Emitter
       end
       flush
       @state = State::DOCUMENT_START
-      @tag_directives.clear
+      @tag_directives.try &.clear
+      @default_tag_directives = false
       return
     end
     error("expected DOCUMENT-END")
@@ -368,8 +417,7 @@ class YAML::Emitter
 
     write_indicator(",", false, false, false) unless first
     write_indent if @canonical || @column > @best_width
-    @states.push(State::FLOW_SEQUENCE_ITEM)
-    emit_node(event, false, true, false, false)
+    emit_node(event, false, true, false, false, State::FLOW_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_flow_mapping_key
@@ -396,12 +444,10 @@ class YAML::Emitter
     write_indent if @canonical || @column > @best_width
 
     if !@canonical && check_simple_key?(event)
-      @states.push(State::FLOW_MAPPING_SIMPLE_VALUE)
-      emit_node(event, false, false, true, true)
+      emit_node(event, false, false, true, true, State::FLOW_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, false)
-      @states.push(State::FLOW_MAPPING_VALUE)
-      emit_node(event, false, false, true, false)
+      emit_node(event, false, false, true, false, State::FLOW_MAPPING_VALUE)
     end
   end
 
@@ -413,8 +459,7 @@ class YAML::Emitter
       write_indent if @canonical || @column > @best_width
       write_indicator(":", true, false, false)
     end
-    @states.push(State::FLOW_MAPPING_KEY)
-    emit_node(event, false, false, true, false)
+    emit_node(event, false, false, true, false, State::FLOW_MAPPING_KEY)
   end
 
   # yaml_emitter_emit_block_sequence_item
@@ -429,8 +474,7 @@ class YAML::Emitter
 
     write_indent
     write_indicator("-", true, false, true)
-    @states.push(State::BLOCK_SEQUENCE_ITEM)
-    emit_node(event, false, true, false, false)
+    emit_node(event, false, true, false, false, State::BLOCK_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_block_mapping_key
@@ -446,12 +490,10 @@ class YAML::Emitter
     write_indent
 
     if check_simple_key?(event)
-      @states.push(State::BLOCK_MAPPING_SIMPLE_VALUE)
-      emit_node(event, false, false, true, true)
+      emit_node(event, false, false, true, true, State::BLOCK_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, true)
-      @states.push(State::BLOCK_MAPPING_VALUE)
-      emit_node(event, false, false, true, false)
+      emit_node(event, false, false, true, false, State::BLOCK_MAPPING_VALUE)
     end
   end
 
@@ -463,61 +505,120 @@ class YAML::Emitter
       write_indent
       write_indicator(":", true, false, true)
     end
-    @states.push(State::BLOCK_MAPPING_KEY)
-    emit_node(event, false, false, true, false)
+    emit_node(event, false, false, true, false, State::BLOCK_MAPPING_KEY)
   end
 
-  # yaml_emitter_emit_node
+  # yaml_emitter_emit_node, with the state to return to (pushed by the
+  # caller in libyaml). A scalar or an alias sets it at once when done,
+  # instead of pushing it for its own pop, and pushes it only if it fails,
+  # which leaves the stack as libyaml's.
   @[AlwaysInline]
-  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
+  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool, next_state : State) : Nil
     @root_context = root
     @sequence_context = sequence
     @mapping_context = mapping
     @simple_key_context = simple_key
 
     case event.value.kind
-    when .alias?          then emit_alias
-    when .scalar?         then emit_scalar(event)
-    when .sequence_start? then emit_sequence_start(event)
-    when .mapping_start?  then emit_mapping_start(event)
+    when .alias?
+      emit_alias(next_state)
+    when .scalar?
+      emit_scalar(event, next_state)
+    when .sequence_start?
+      @states.push(next_state)
+      emit_sequence_start(event)
+    when .mapping_start?
+      @states.push(next_state)
+      emit_mapping_start(event)
     else
+      @states.push(next_state)
       error("expected SCALAR, SEQUENCE-START, MAPPING-START, or ALIAS")
     end
   end
 
   # yaml_emitter_emit_alias
-  private def emit_alias : Nil
-    process_anchor
-    put(' '.ord.to_u8) if @simple_key_context
-    @state = @states.pop
+  private def emit_alias(next_state : State) : Nil
+    begin
+      process_anchor
+      put(' '.ord.to_u8) if @simple_key_context
+    rescue ex
+      @states.push(next_state)
+      raise ex
+    end
+    @state = next_state
   end
 
-  # yaml_emitter_emit_scalar
+  # yaml_emitter_emit_scalar. A simple plain scalar is written without the
+  # increase_indent/pop pair around process_scalar: the indentation is only
+  # read by line breaks, and it has none.
   @[AlwaysInline]
-  private def emit_scalar(event : Event*) : Nil
-    select_scalar_style(event)
-    process_anchor
-    process_tag
-    increase_indent(true, false)
-    process_scalar unless write_plain_word?
-    @indent = @indents.pop
-    @state = @states.pop
+  private def emit_scalar(event : Event*, next_state : State) : Nil
+    begin
+      select_scalar_style(event)
+      process_anchor
+      process_tag
+      unless write_simple_plain?
+        increase_indent(true, false)
+        process_scalar
+        @indent = @indents.pop
+      end
+    rescue ex
+      @states.push(next_state)
+      raise ex
+    end
+    @state = next_state
   end
 
-  # The usual case of process_scalar, inlined: a plain one-word ASCII
-  # scalar (see `@ascii_word`) with room for it and a space before it before
-  # the next FLUSH. Writes what write_plain_scalar would.
+  # The usual case of process_scalar, inlined: a plain scalar of printable
+  # ASCII without breaks (see `@simple_scalar`), with room for it and a
+  # space before it before the next FLUSH, and no space past `@best_width`
+  # that write_plain_scalar would break the line at. Writes what
+  # write_plain_scalar would: the scalar as it is.
   @[AlwaysInline]
-  private def write_plain_word? : Bool
+  private def write_simple_plain? : Bool
     length = @scalar_length
-    return false unless @scalar_style.plain? && @ascii_word && length < @write_limit - @pos
+    return false unless @scalar_style.plain? && @simple_scalar && length < @write_limit - @pos
+    if @scalar_spaces && !@simple_key_context
+      # Every column it is written at is at most `@best_width` (the space
+      # put before it included).
+      column = @whitespace ? @column : @column + 1
+      return false unless length <= @best_width - column
+    end
     put(' '.ord.to_u8) unless @whitespace
-    (@buffer + @pos).copy_from(@scalar_value, length)
+    copy_bytes(@buffer + @pos, @scalar_value, length)
     @pos &+= length # below @write_limit
     @column += length
     @whitespace = false
     @indention = false
     true
+  end
+
+  # Copies *count* bytes from *src* to *dst*. Scalars are mostly short
+  # words: up to 16 bytes are copied with two overlapping loads and stores
+  # (of 8 or 4 bytes, or single bytes), which stay inside both ranges and
+  # cost less than a call to memcpy.
+  @[AlwaysInline]
+  private def copy_bytes(dst : Pointer(UInt8), src : Pointer(UInt8), count : Int32) : Nil
+    if count >= 8
+      return dst.copy_from(src, count) if count > 16
+      head = Chars.load_word(src)
+      tail = Chars.load_word(src + (count &- 8))
+      dst.copy_from(pointerof(head).as(Pointer(UInt8)), 8)
+      (dst + (count &- 8)).copy_from(pointerof(tail).as(Pointer(UInt8)), 8)
+    elsif count >= 4
+      head32 = uninitialized UInt32
+      tail32 = uninitialized UInt32
+      pointerof(head32).as(Pointer(UInt8)).copy_from(src, 4)
+      pointerof(tail32).as(Pointer(UInt8)).copy_from(src + (count &- 4), 4)
+      dst.copy_from(pointerof(head32).as(Pointer(UInt8)), 4)
+      (dst + (count &- 4)).copy_from(pointerof(tail32).as(Pointer(UInt8)), 4)
+    elsif count > 0
+      # 1 to 3 bytes: the first, middle and last cover them.
+      half = count >> 1
+      dst[0] = src[0]
+      dst[half] = src[half]
+      dst[count &- 1] = src[count &- 1]
+    end
   end
 
   # yaml_emitter_emit_sequence_start
@@ -716,7 +817,7 @@ class YAML::Emitter
     p = tag.to_unsafe
     size = tag.bytesize
     error("tag value must not be empty") if size == 0
-    @tag_directives.each do |(handle, prefix)|
+    each_tag_directive do |(handle, prefix)|
       prefix_length = prefix.bytesize
       if prefix_length < size && prefix.to_unsafe.memcmp(p, prefix_length) == 0
         @tag_handle = handle.to_unsafe
@@ -736,7 +837,7 @@ class YAML::Emitter
   private def analyze_scalar(value : Pointer(UInt8), length : Int32) : Nil
     @scalar_value = value
     @scalar_length = length
-    @ascii_word = false
+    @simple_scalar = false
 
     if length == 0
       @multiline = false
@@ -747,14 +848,15 @@ class YAML::Emitter
       return
     end
 
-    simple, spaces = simple_scalar(value, length)
+    simple, spaces, flow_indicators = simple_scalar(value, length)
     if simple
       @multiline = false
-      @flow_plain_allowed = true
+      @flow_plain_allowed = !flow_indicators
       @block_plain_allowed = true
       @single_quoted_allowed = true
       @block_allowed = true
-      @ascii_word = !spaces
+      @simple_scalar = true
+      @scalar_spaces = spaces
       return
     end
 
@@ -941,33 +1043,97 @@ class YAML::Emitter
   end
 
   # Whether `analyze_scalar` would set no flag for the scalar at *s*
-  # (*length* > 0), and whether it has spaces. It sets none when the first
-  # character is in FIRST_ASCII, or is a `-` or `.` followed by a character
-  # in PLAIN_ASCII (not whitespace) other than the start of `---` or `...`,
-  # the others are in PLAIN_ASCII or spaces, and the last isn't a space.
-  # Such spaces set no flag: no break is next to them, and the indicators
-  # that look at them (`#` after one, `:` before one) are not in
-  # PLAIN_ASCII. (Like analyze_scalar, this reads up to s[2]: the value is a
+  # (*length* > 0) but `flow_indicators`, whether it has spaces, and whether
+  # it sets `flow_indicators`. That is the case when the first character is
+  # in FIRST_ASCII, or is a `-` or `.` followed by a character in
+  # PLAIN_ASCII (not whitespace) other than the start of `---` or `...`, the
+  # others are in PLAIN_ASCII, spaces, or flow indicators (`,` `?` `[` `]`
+  # `{` `}`, and `:` unless whitespace follows it), and the last isn't a
+  # space. Such spaces set no flag: no break is next to them, and the
+  # indicators that look at them (`#` after one, `:` before one) are
+  # excluded. (Like analyze_scalar, this reads up to s[2]: the value is a
   # String's bytes, followed by a NUL.)
   @[AlwaysInline]
-  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool, Bool}
     c = s[0]
     unless first_ascii?(c) ||
            ((c == '-'.ord || c == '.'.ord) && plain_ascii?(s[1]) && !(s[1] == c && s[2] == c))
-      return {false, false}
+      return {false, false, false}
     end
-    return {false, false} if s[length - 1] == ' '.ord
+    return {false, false, false} if s[length - 1] == ' '.ord
+    return simple_scalar_words(s, length) if length >= 8
     spaces = false
     i = 1
     while i < length
       c = s[i]
       unless plain_ascii?(c)
-        return {false, false} unless c == ' '.ord
+        return simple_scalar_bytes(s, i, length, spaces) unless c == ' '.ord
         spaces = true
       end
       i &+= 1 # below length
     end
-    {true, spaces}
+    {true, spaces, false}
+  end
+
+  # The loop of `#simple_scalar` from *i*, with the spaces found before it,
+  # for a scalar that has other bytes than PLAIN_ASCII and spaces. Out of
+  # line, like `#simple_scalar_words`. (The first byte passed the test in
+  # `#simple_scalar`, so it is in PLAIN_ASCII and changes no result if *i*
+  # is 0.)
+  @[NoInline]
+  private def simple_scalar_bytes(s : Pointer(UInt8), i : Int32, length : Int32, spaces : Bool) : {Bool, Bool, Bool}
+    flow_indicators = false
+    while i < length
+      c = s[i]
+      unless plain_ascii?(c)
+        if c == ' '.ord
+          spaces = true
+        elsif c == ','.ord || c == '?'.ord || c == '['.ord || c == ']'.ord ||
+              c == '{'.ord || c == '}'.ord || c == ':'.ord
+          # Whitespace after `:` (a space, or the end) makes it a block
+          # indicator too.
+          return {false, false, false} if c == ':'.ord && (i &+ 1 == length || s[i &+ 1] == ' '.ord)
+          flow_indicators = true
+        else
+          return {false, false, false}
+        end
+      end
+      i &+= 1 # below length
+    end
+    {true, spaces, flow_indicators}
+  end
+
+  # `#simple_scalar` for *length* >= 8: eight bytes at a time while they
+  # are in PLAIN_ASCII or spaces (the words at 0, 8, ... and the last word,
+  # which may overlap the one before), then byte by byte from the first
+  # word that isn't. Out of line, so it doesn't weigh on the registers of
+  # the inlined short case.
+  @[NoInline]
+  private def simple_scalar_words(s : Pointer(UInt8), length : Int32) : {Bool, Bool, Bool}
+    spaces = 0_u64
+    i = 0
+    while true
+      word = Chars.load_word(s + i)
+      return simple_scalar_bytes(s, i, length, spaces != 0) unless plain_or_space_word?(word)
+      spaces |= Chars.equal_mask(word, ' '.ord.to_u8)
+      return {true, spaces != 0, false} if i == length &- 8
+      i = Math.min(i &+ 8, length &- 8)
+    end
+  end
+
+  # Whether every byte of *word* is in PLAIN_ASCII or a space: printable
+  # ASCII (0x20..0x7E) other than `#` `,` `:` `?` `[` `]` `{` `}`. With
+  # bit 5 set, `[` and `]` become `{` and `}`, and no other byte does.
+  # (A borrow can flag a byte after a flagged one, so only "none" is exact.)
+  @[AlwaysInline]
+  private def plain_or_space_word?(word : UInt64) : Bool
+    lower = word | 0x2020202020202020_u64
+    flags = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x20_u8) |
+            Chars.equal_mask(word, 0x7F_u8) |
+            Chars.equal_mask(word, '#'.ord.to_u8) | Chars.equal_mask(word, ','.ord.to_u8) |
+            Chars.equal_mask(word, ':'.ord.to_u8) | Chars.equal_mask(word, '?'.ord.to_u8) |
+            Chars.equal_mask(lower, '{'.ord.to_u8) | Chars.equal_mask(lower, '}'.ord.to_u8)
+    flags == 0
   end
 
   # yaml_emitter_analyze_event (inlined: mostly a few stores)
@@ -1126,25 +1292,41 @@ class YAML::Emitter
   # yaml_emitter_write_indent
   private def write_indent : Nil
     indent = @indent >= 0 ? @indent : 0
-    if !@indention || @column > indent || (@column == indent && !@whitespace)
-      put_break
+    column = @column
+    need_break = !@indention || column > indent || (column == indent && !@whitespace)
+    # Fast path: an indentation of at most 16 columns, and room for the
+    # break and 16 spaces before the next FLUSH, so none of the PUTs
+    # would flush (or grow the buffer). Store the break and 16 spaces;
+    # those past the indentation are past the end of the output, which
+    # overwrites them. (`@write_limit` is at least INITIAL_BUFFER_SIZE - 5.)
+    pos = @pos
+    return write_indent_slow(indent, need_break) unless indent <= 16 && pos <= @write_limit &- 17
+    buffer = @buffer
+    if need_break
+      buffer[pos] = '\n'.ord.to_u8
+      pos &+= 1
+      column = 0
     end
+    spaces = 0x2020202020202020_u64
+    (buffer + pos).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+    (buffer + pos + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+    # Without a break, `column <= indent` (`column > indent` needs one).
+    @pos = pos &+ (indent &- column)
+    @column = indent
+    @whitespace = true
+    @indention = true
+  end
+
+  # The rest of yaml_emitter_write_indent: PUT per character, except that
+  # the spaces that fit before a flush (or growing the buffer) are stored
+  # at once.
+  @[NoInline]
+  private def write_indent_slow(indent : Int32, need_break : Bool) : Nil
+    put_break if need_break
     while @column < indent
-      # Fast path: PUT repeated over the spaces that fit before a flush (or
-      # growing the buffer).
       n = Math.min(indent - @column, @write_limit - @pos)
       if n > 0
-        buf = @buffer + @pos
-        if n <= 16 && @pos <= @capacity - 16
-          # Indents are short: store 16 spaces (inside the buffer) instead
-          # of calling memset. Those past `n` are past the end of the output,
-          # which overwrites them.
-          spaces = 0x2020202020202020_u64
-          buf.copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
-          (buf + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
-        else
-          buf.fill(n, ' '.ord.to_u8)
-        end
+        (@buffer + @pos).fill(n, ' '.ord.to_u8)
         @pos += n
         @column += n
         next

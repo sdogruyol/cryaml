@@ -112,20 +112,29 @@ The hot loops keep libyaml's structure but do less per character:
   like libyaml's `yaml_parser_t`; `Queue` and `Stack` are structs held in
   it, like libyaml's embedded `QUEUE`/`STACK` fields, so there is no
   per-push call, allocation or pointer chase. The stream's simple key is a
-  field; only flow levels push theirs. Dequeued event slots are cleared so
-  their strings can be collected; token slots are not (as in libyaml, the
-  strings live on in events);
+  field; only flow levels push theirs. Dequeued event slots have their
+  references cleared so their strings can be collected; token slots are not
+  (as in libyaml, the strings live on in events);
 - the default `%TAG` directives are looked up after a document's own
   instead of being copied into its list, and `PullParser` creates its
   anchor bookkeeping only at the first anchor;
 - position, index and token counters use wrapping arithmetic where they
   provably cannot overflow;
-- the emitter takes events by pointer (`yaml_event_t *`), and an event that
-  needs no lookahead is processed without going through the queue when
-  nothing is queued, which is what libyaml's queue loop would do at once;
+- the emitter takes events by pointer (`yaml_event_t *`). `Builder` builds
+  each event in the emitter queue's free slot instead of having it copied
+  in (ENQUEUE), without storing its marks, which are always zero there; an
+  event that needs no lookahead is processed in that slot without being
+  queued when nothing is queued, which is what libyaml's queue loop would
+  do at once;
 - most scalars are printable ASCII without breaks, edge spaces or
-  indicators; `analyze_scalar` recognizes them with two bit sets in one pass,
-  and a plain one-word scalar is copied to the buffer at once.
+  indicators other than flow ones; `analyze_scalar` recognizes them with
+  bit sets (eight bytes at a time from 8 bytes on), and such a plain scalar
+  is copied to the buffer at once when no line break could fall in it,
+  without the indentation push and pop;
+- a scalar or alias sets the state to return to instead of popping what its
+  caller pushed, and pushes it only when it fails, which leaves libyaml's
+  stack; `write_indent` stores short indentation at once, and `Builder`
+  checks short values for UTF-8 with two overlapping words.
 
 ### Deliberate differences from libyaml
 
