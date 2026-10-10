@@ -896,13 +896,21 @@ class YAML::Emitter
 
   # Whether `analyze_scalar` would set no flag for the scalar at *s*
   # (*length* > 0), and whether it has spaces. It sets none when the first
-  # character is in FIRST_ASCII, the others are in PLAIN_ASCII or spaces,
-  # and the last isn't a space. Such spaces set no flag: no break is next to
-  # them, and the indicators that look at them (`#` after one, `:` before
-  # one) are not in PLAIN_ASCII.
+  # character is in FIRST_ASCII, or is a `-` or `.` followed by a character
+  # in PLAIN_ASCII (not whitespace) other than the start of `---` or `...`,
+  # the others are in PLAIN_ASCII or spaces, and the last isn't a space.
+  # Such spaces set no flag: no break is next to them, and the indicators
+  # that look at them (`#` after one, `:` before one) are not in
+  # PLAIN_ASCII. (Like analyze_scalar, this reads up to s[2]: the value is a
+  # String's bytes, followed by a NUL.)
   @[AlwaysInline]
   private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
-    return {false, false} unless first_ascii?(s[0]) && s[length - 1] != ' '.ord
+    c = s[0]
+    unless first_ascii?(c) ||
+           ((c == '-'.ord || c == '.'.ord) && plain_ascii?(s[1]) && !(s[1] == c && s[2] == c))
+      return {false, false}
+    end
+    return {false, false} if s[length - 1] == ' '.ord
     spaces = false
     i = 1
     while i < length
