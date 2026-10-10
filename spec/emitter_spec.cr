@@ -43,6 +43,23 @@ describe YAML::Builder do
     io.written.should be_empty
   end
 
+  # The event whose flush failed stays at the head of libyaml's queue, so the
+  # next call processes it again (output recorded from the libyaml binding).
+  it "keeps emitting after the IO failed" do
+    io = FailOnceIO.new
+    builder = YAML::Builder.new(io)
+    builder.start_stream
+    builder.start_document
+    builder.scalar "hello"
+    expect_raises(IO::Error, "disk full") { builder.end_document }
+    builder.start_document
+    builder.scalar "again"
+    builder.end_document
+    builder.end_stream
+    builder.flush
+    io.written.should eq(["--- again\n"])
+  end
+
   # A tag's %-escapes can decode to bytes libyaml's yaml_check_utf8 rejects
   # (here an overlong sequence). Re-emitting such a node used to send a
   # stale event through the binding; cryaml reports it.

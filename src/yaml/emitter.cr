@@ -114,9 +114,11 @@ class YAML::Emitter
       begin
         analyze_event(event)
         state_machine(event)
-      rescue Failure
-        # libyaml leaves the failed event at the head of the queue.
+      rescue ex
+        # libyaml leaves the failed event at the head of the queue, also when
+        # the IO raises during a flush, so the next call processes it again.
         @events << event.value
+        raise ex unless ex.is_a?(Failure)
         return false
       end
       return true
