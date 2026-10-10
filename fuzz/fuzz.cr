@@ -33,8 +33,9 @@ module Fuzz
   ]
 
   def self.seeds : Array(String)
-    paths = Dir.glob(File.join(ROOT, "spec", "fixtures", "{yaml-test-suite,edge}", "*.yaml")) +
-            Dir.glob(File.join(ROOT, "samples", "*.{yaml,yml}"))
+    root = Path[ROOT].to_posix.to_s
+    paths = Dir.glob(File.join(root, "spec", "fixtures", "{yaml-test-suite,edge}", "*.yaml")) +
+            Dir.glob(File.join(root, "samples", "*.{yaml,yml}"))
     paths.sort.map { |path| File.read(path) }.reject { |input| input.bytesize > 20_000 }
   end
 
@@ -146,22 +147,22 @@ module Fuzz
   class_property libyaml_server = ""
   class_property cryaml_server = ""
 
-  # Dumps of *cases* from *server*. Cases on which the server crashes or
-  # hangs are found by bisection and get `CRASHED`.
-  def self.dumps(server : String, cases : Array(Differential::Case)) : Hash(String, String)
+  # Dumps of *cases* from *server* (running *engine*). Cases on which the
+  # server crashes or hangs are found by bisection and get `CRASHED`.
+  def self.dumps(server : String, engine : String, cases : Array(Differential::Case)) : Hash(String, String)
     timeout = Math.max(10.0, cases.size * 0.05).seconds
-    Differential.run_server(server, cases, timeout)
+    Differential.run_server(server, cases, timeout, engine: engine)
   rescue Differential::ServerFailure
     return {Differential.key(cases[0]) => CRASHED} if cases.size == 1
     half = cases.size // 2
-    dumps(server, cases[0, half]).merge(dumps(server, cases[half..]))
+    dumps(server, engine, cases[0, half]).merge(dumps(server, engine, cases[half..]))
   end
 
   # Compares both sides on *cases*; crashes on both sides count as agreement
   # (the shared stdlib layers crash on some inputs in both).
   def self.compare(cases : Array(Differential::Case)) : Array(Finding)
-    expected = dumps(libyaml_server, cases)
-    actual = dumps(cryaml_server, cases)
+    expected = dumps(libyaml_server, "libyaml", cases)
+    actual = dumps(cryaml_server, "cryaml", cases)
     cases.compact_map do |c|
       key = Differential.key(c)
       want, got = expected[key], actual[key]
@@ -177,13 +178,19 @@ module Fuzz
   # Malformed UTF-8 reaching `Builder` (for example a tag whose `%`-escapes
   # decode to an overlong sequence, re-emitted by the `emit` mode): libyaml's
   # event constructor rejects it, the binding ignores that and re-emits a
-  # stale event, so its output is undefined; cryaml raises a YAML::Error
-  # (documented in docs/ARCHITECTURE.md). Accept that when everything before
-  # the error is identical.
+  # stale event, so its output from there on is undefined; cryaml raises a
+  # YAML::Error (documented in docs/ARCHITECTURE.md). The emit and build
+  # dumps are the emitted text (inspected, one line) and then the error, so
+  # accept the case when cryaml stopped with that error and everything it
+  # emitted is also what libyaml emitted up to that point.
   def self.known_divergence?(want : String, got : String) : Bool
     got_lines = got.lines
-    return false unless got_lines.last?.try(&.ends_with?(": invalid UTF-8 string"))
-    want.lines[0...-1] == got_lines[0...-1]
+    want_emitted = want.lines.first?
+    return false unless got_lines.size == 2 && got_lines[1].ends_with?(": invalid UTF-8 string")
+    return false unless want_emitted && want_emitted.starts_with?('"') && got_lines[0].starts_with?('"')
+    # Without the closing quotes, a prefix of the escaped text is a prefix of
+    # the text.
+    want_emitted.rchop.starts_with?(got_lines[0].rchop)
   end
 
   # Delta debugging: repeatedly drop chunks while the case still fails the

@@ -8,14 +8,16 @@ require "./spec_helper"
 # yields the same text and the same value. The first dump itself is compared
 # against the stdlib by the `dump` mode of `differential_spec.cr`.
 private def roundtrip_corpus : Array({String, String})
-  root = File.expand_path("..", __DIR__)
-  paths = Dir.glob(File.join(root, "samples", "*.{yaml,yml}")) +
-          Dir.glob(File.join(root, "spec", "fixtures", "yaml-test-suite", "*.yaml")) +
-          Dir.glob(File.join(root, "spec", "fixtures", "edge", "*.yaml"))
+  # Globs need `/` separators (`__DIR__` has `\` on Windows).
+  root = Path[File.expand_path("..", __DIR__)].to_posix
+  paths = Dir.glob(root.join("samples", "*.{yaml,yml}").to_s) +
+          Dir.glob(root.join("spec", "fixtures", "yaml-test-suite", "*.yaml").to_s) +
+          Dir.glob(root.join("spec", "fixtures", "edge", "*.yaml").to_s)
+  raise "no corpus files under #{root}" if paths.empty?
   paths.sort.compact_map do |path|
     input = File.read(path)
     YAML.parse_all(input) rescue next
-    {Path[path].relative_to(root).to_s, input}
+    {Path[path].relative_to(root).to_posix.to_s, input}
   end
 end
 

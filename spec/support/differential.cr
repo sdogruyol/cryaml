@@ -24,6 +24,7 @@ module Differential
   CACHE_DIR       = File.join(ROOT, ".cache")
   GOLDEN_DIR      = File.join(ROOT, "spec", "fixtures", "golden")
   VERSION_KEY     = "__libyaml_version__"
+  ENGINE_KEY      = "__engine__"
 
   def self.oracle_mode : String?
     ENV["CRYAML_ORACLE"]?.presence
@@ -42,8 +43,12 @@ module Differential
     name = "oracle#{cryaml ? "-cryaml" : ""}#{release ? "-release" : ""}"
     binary = File.join(CACHE_DIR, {% if flag?(:win32) %}"#{name}.exe"{% else %}name{% end %})
     sources = [File.join(__DIR__, "oracle.cr"), File.join(__DIR__, "dump.cr")]
-    sources.concat(Dir.glob(File.join(ROOT, "src", "**", "*.cr"))) if cryaml
-    if File.exists?(binary)
+    sources.concat(Dir.glob(File.join(Path[ROOT].to_posix, "src", "**", "*.cr"))) if cryaml
+    # What else decides which YAML the binary contains: the compiler, its
+    # stdlib path (a shim there would load cryaml) and the libyaml prefix.
+    stamp = {`crystal env CRYSTAL_VERSION CRYSTAL_PATH`, ENV["CRYAML_LIBYAML_PREFIX"]?}.to_json
+    stamp_path = "#{binary}.stamp"
+    if File.exists?(binary) && File.exists?(stamp_path) && File.read(stamp_path) == stamp
       built = File.info(binary).modification_time
       return binary if sources.all? { |src| File.info(src).modification_time < built }
     end
@@ -62,6 +67,7 @@ module Differential
     status = Process.run("crystal", args, output: Process::Redirect::Inherit, error: Process::Redirect::Inherit)
     raise "failed to build #{binary} (is libyaml installed?)" unless status.success?
     File.rename(partial, binary)
+    File.write(stamp_path, stamp)
     binary
   end
 
@@ -69,15 +75,16 @@ module Differential
     "#{c.mode} #{c.name}"
   end
 
-  # Runs the libyaml oracle on *cases*, returning `key` => dump. Raises
-  # unless the oracle links libyaml 0.2.5.
+  # Runs the libyaml oracle on *cases*, returning `key` => dump.
   def self.oracle(cases : Array(Case)) : Hash(String, String)
-    run_server(oracle_binary, cases)
+    run_server(oracle_binary, cases, engine: "libyaml")
   end
 
   # Runs a dump server built by `oracle_binary` on *cases*. Raises
-  # `ServerFailure` if it crashes or takes longer than *timeout*.
-  def self.run_server(binary : String, cases : Array(Case), timeout : Time::Span? = nil) : Hash(String, String)
+  # `ServerFailure` if it crashes or takes longer than *timeout*, and refuses
+  # a server that doesn't run *engine* ("libyaml", which must be 0.2.5, or
+  # "cryaml"; cryaml also reports 0.2.5 as its libyaml version).
+  def self.run_server(binary : String, cases : Array(Case), timeout : Time::Span? = nil, *, engine : String) : Hash(String, String)
     Dir.mkdir_p(CACHE_DIR)
     bundle = File.tempfile("bundle", ".json", dir: CACHE_DIR)
     begin
@@ -107,7 +114,12 @@ module Differential
       raise ServerFailure.new("#{binary} failed:\n#{errors.to_s[0, 2000]}") unless status.success?
       result = Hash(String, String).from_json(output.to_s)
       version = result.delete(VERSION_KEY)
-      unless version == LIBYAML_VERSION
+      actual_engine = result.delete(ENGINE_KEY)
+      unless actual_engine == engine
+        raise "#{binary} runs #{actual_engine.inspect}, expected #{engine.inspect} " \
+              "(was it built with a CRYSTAL_PATH that loads cryaml for `require \"yaml\"`?)"
+      end
+      if engine == "libyaml" && version != LIBYAML_VERSION
         raise "the oracle links libyaml #{version}, but #{LIBYAML_VERSION} is required " \
               "(build libyaml #{LIBYAML_VERSION} and set CRYAML_LIBYAML_PREFIX)"
       end

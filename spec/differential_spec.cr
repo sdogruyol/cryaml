@@ -5,10 +5,14 @@ require "./support/differential"
 # (see `support/oracle.cr`); the observable results must be identical.
 private FIXTURES = File.join(__DIR__, "fixtures")
 
+# Globs need `/` separators (`__DIR__` has `\` on Windows), and the golden
+# keys are POSIX paths on every platform.
 private def corpus(dir : String) : Array({String, String})
-  Dir.glob(File.join(dir, "**", "*.{yaml,yml}")).sort.map do |path|
-    {Path[path].relative_to(Differential::ROOT).to_s, File.read(path)}
+  files = Dir.glob(Path[dir].to_posix.join("**", "*.{yaml,yml}").to_s).sort.map do |path|
+    {Path[path].relative_to(Differential::ROOT).to_posix.to_s, File.read(path)}
   end
+  raise "no corpus files under #{dir}" if files.empty?
+  files
 end
 
 # Inputs cut at a few points, to exercise error paths and stream ends.

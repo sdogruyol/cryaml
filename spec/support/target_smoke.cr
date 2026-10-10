@@ -16,8 +16,9 @@ ROOT = File.expand_path("../..", __DIR__)
 
 case ARGV[0]?
 when "bundle"
-  paths = Dir.glob(File.join(ROOT, "spec", "fixtures", "{yaml-test-suite,edge}", "*.yaml")) +
-          Dir.glob(File.join(ROOT, "samples", "*.{yaml,yml}"))
+  root = Path[ROOT].to_posix.to_s
+  paths = Dir.glob(File.join(root, "spec", "fixtures", "{yaml-test-suite,edge}", "*.yaml")) +
+          Dir.glob(File.join(root, "samples", "*.{yaml,yml}"))
   paths.sort.each do |path|
     input = File.read(path)
     begin

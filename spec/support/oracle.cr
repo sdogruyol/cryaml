@@ -8,7 +8,8 @@
 # Usage: oracle BUNDLE.json
 #   BUNDLE.json: [{"name": ..., "mode": ..., "input": BASE64}, ...]
 # Prints a JSON object mapping each name to the dump of its case, plus
-# "__libyaml_version__" (the harness refuses anything but 0.2.5).
+# "__engine__" ("libyaml" or "cryaml") and "__libyaml_version__" (the harness
+# refuses anything but libyaml 0.2.5 as the reference).
 require "json"
 {% if flag?(:cryaml) %}
   require "../../src/cryaml"
@@ -21,4 +22,5 @@ require "./dump"
 cases = Array({name: String, mode: String, input: String}).from_json(File.read(ARGV[0]))
 result = cases.to_h { |c| {c[:name], CryamlDump.run(c[:mode], String.new(Base64.decode(c[:input])))} }
 result["__libyaml_version__"] = YAML.libyaml_version.to_s
+result["__engine__"] = {{ @top_level.has_constant?("LibYAML") ? "libyaml" : "cryaml" }}
 STDOUT << result.to_json

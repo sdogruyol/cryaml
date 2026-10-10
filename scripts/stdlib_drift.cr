@@ -39,7 +39,7 @@ ADAPTED.each do |path, (ours, sha1)|
 end
 
 loaded = File.read_lines(File.join(ROOT, "src", "yaml.cr")).compact_map { |line| line.match(/\Arequire "(yaml\/[^"]+)"/).try { |m| "#{m[1]}.cr" } }.to_set
-Dir.glob(File.join(STDLIB, "yaml", "**", "*.cr")).each do |file|
+Dir.glob(File.join(Path[STDLIB].to_posix, "yaml", "**", "*.cr")).each do |file|
   path = Path[file].relative_to(STDLIB).to_posix.to_s
   next if loaded.includes?(path) || ADAPTED.has_key?(path)
   problems << "#{path}: loaded by the stdlib's yaml.cr but not by src/yaml.cr"
