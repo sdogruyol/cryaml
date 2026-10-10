@@ -75,13 +75,13 @@ runs the stdlib's `spec/std/yaml` of Crystal 1.21.0, the latest release and
 nightly against cryaml.
 
 **Same behavior as libyaml.** Every input in the
-[yaml-test-suite](https://github.com/yaml/yaml-test-suite), 121 edge cases
+[yaml-test-suite](https://github.com/yaml/yaml-test-suite), 168 edge cases
 (tabs, BOMs, UTF-16, invalid UTF-8, directives, chunk boundaries, NUL in
 tags) and 12 real-world files (Kubernetes, Docker Compose, GitHub Actions,
 CircleCI, Helm, Home Assistant, OpenAPI) is compared with libyaml 0.2.5:
 events with line/column positions, styles, tags, anchors, values, error
 messages, `YAML::Any` results, node trees and emitted YAML must be
-identical, and are. So are 3,805 `YAML::Builder` scripts (every value in
+identical, and are. So are 3,862 `YAML::Builder` scripts (every value in
 every scalar style in every position, plus random and invalid ones). On top:
 a line-by-line review of the port against libyaml's C source, a differential
 fuzzer (1.2 billion cases in one overnight run; it also runs nightly in CI),

@@ -147,9 +147,10 @@ flowchart LR
   in six modes: pull events (from a `String` and from a chunked `IO`),
   `YAML.parse_all`, `YAML::Nodes.parse_all`, re-emitting the events through
   `Builder`, and `to_yaml` round trips, plus three truncations of every
-  test-suite file. `spec/builder_differential_spec.cr` covers 3,805 `Builder`
+  test-suite file. `spec/builder_differential_spec.cr` covers 3,862 `Builder`
   scripts: 400 random ones, every value x scalar style x position, invalid
-  sequences and byte strings libyaml accepts. Expected output is recorded in
+  sequences, byte strings libyaml accepts, NUL in anchors and tags, and
+  line-width boundaries per style. Expected output is recorded in
   `spec/fixtures/golden` from libyaml 0.2.5, so these specs run on every
   platform; `CRYAML_ORACLE=1` compares with the live oracle instead (CI does
   on Linux and macOS) and checks the recordings are current,
@@ -170,8 +171,8 @@ flowchart LR
   `scripts/memcheck.sh` builds with `-Dgc_none` (plain malloc, so
   out-of-bounds access shows up) and runs the spec suite and fuzzer-generated
   inputs under valgrind's memcheck. CI fails on any error not matched by
-  `scripts/memcheck.supp` (known stdlib bugs, each pinned to its stdlib
-  frames), and when either run doesn't complete.
+  `scripts/memcheck.supp` (two known stdlib bugs and PCRE2 JIT reads, each
+  pinned to their frames), and when either run doesn't complete.
 - **Hostile input and round trips.** `spec/security_spec.cr` covers deep
   nesting, alias bombs, multi-megabyte scalars, long lines and malformed
   encodings; `spec/roundtrip_spec.cr` checks that parse, dump, parse is

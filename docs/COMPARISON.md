@@ -61,9 +61,9 @@ The engine adds `YAML::Reader`, `Scanner`, `Token`, `TokenKind`, `Mark`,
 
 - `spec/std/yaml` of Crystal 1.21.0 (in `spec/std/`), and of the latest
   release and nightly in CI, passes against cryaml.
-- Differential specs compare cryaml with libyaml 0.2.5 on 535 inputs
+- Differential specs compare cryaml with libyaml 0.2.5 on 582 inputs
   (yaml-test-suite, edge cases, real-world files) in six modes, 1,183
-  truncated inputs, and 3,805 `Builder` scripts. A differential fuzzer runs
+  truncated inputs, and 3,862 `Builder` scripts. A differential fuzzer runs
   nightly. See [ARCHITECTURE.md](ARCHITECTURE.md#testing).
 - The ameba and crystal-i18n test suites and shards' unit specs pass on
   cryaml in CI.
