@@ -277,7 +277,7 @@ class YAML::Reader
 
   # libyaml `READ_LINE`: copies a line break into *string* (normalizing CR,
   # LF, CR LF and NEL to LF; LS and PS are kept) and advances.
-  @[AlwaysInline]
+  @[NoInline]
   def read_line(string : ByteBuffer) : Nil
     if check?('\r') && check?('\n', 1)
       string << '\n'
