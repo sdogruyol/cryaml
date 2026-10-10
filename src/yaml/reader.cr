@@ -77,8 +77,15 @@ class YAML::Reader
       raw_buffer = Bytes.new(RAW_BUFFER_SIZE + PADDING)
       @raw_buffer = raw_buffer
       @raw = raw_buffer.to_unsafe
-      @read_handler = ->(buffer : Bytes) { input.read(buffer) }
+      @read_handler = read_handler(input)
     end
+  end
+
+  # A proc literal in `#initialize` would capture *input* in a closure
+  # allocated on every call, also for `String` input; built here, only `IO`
+  # input pays for it.
+  private def read_handler(io : IO) : Proc(Bytes, Int32)
+    ->(buffer : Bytes) { io.read(buffer) }
   end
 
   # The current position.
