@@ -1254,6 +1254,45 @@ class YAML::Scanner < YAML::Reader
     n
   end
 
+  # At the line break that follows a plain scalar in the block context,
+  # whether only line breaks and spaces lie between it and the next line
+  # indented less than *indent*, so the scalar ends here. If so, skips them
+  # and returns true: the loop of `#scan_plain_scalar` would skip them too,
+  # after copying the breaks to scratch strings that end up unused.
+  #
+  # Only LF breaks and spaces are skipped this way, and only while two more
+  # characters stay decoded (so every `CACHE` the loop does there is a
+  # no-op). Anything else (tabs, which can be errors; other breaks; the end
+  # of the input; a line that continues the scalar) is left to the loop.
+  @[AlwaysInline]
+  private def skip_to_dedent?(indent : Int32) : Bool
+    p = pointer
+    limit = @unread &- 2
+    i = 0
+    lines = 0
+    column = 0
+    while i < limit
+      b = p[i]
+      if b == '\n'.ord
+        lines &+= 1
+        column = 0
+      elsif b == ' '.ord
+        column &+= 1
+      else
+        # Any character that can start a token or a comment.
+        return false unless b > 0x20 && b < 0x80 && column < indent
+        @index &+= i
+        @line &+= lines
+        @column = column.to_i64
+        @unread &-= i
+        @pos &+= i
+        return true
+      end
+      i &+= 1
+    end
+    false
+  end
+
   # yaml_parser_scan_plain_scalar
   private def scan_plain_scalar : Token
     start_mark = end_mark = mark
@@ -1284,6 +1323,13 @@ class YAML::Scanner < YAML::Reader
         skip_ascii(n)
         verbatim_end = input_offset
         end_mark = mark
+        if @flow_level == 0 && check?('\n') && skip_to_dedent?(@indent &+ 1)
+          # What the loop below would do at this point when the scalar ends
+          # with its line.
+          @simple_key_allowed = true
+          return Token.new(TokenKind::SCALAR, start_mark, end_mark,
+            value: input_to_s(verbatim_start, verbatim_end, n), style: ScalarStyle::PLAIN)
+        end
         resume = true
       end
     end
