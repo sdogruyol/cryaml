@@ -14,13 +14,13 @@ class YAML::Scanner < YAML::Reader
     token_number : Int64,
     mark : Mark
 
-  @tokens = Queue(Token).new
+  @tokens = Deque(Token).new
   @token_available = false
   @tokens_parsed = 0_i64
   @stream_start_produced = false
   @stream_end_produced = false
   @indent = -1
-  @indents = Stack(Int32).new
+  @indents = [] of Int32
   @simple_key_allowed = false
   @simple_keys = [] of SimpleKey
   # Every simple key below this index is known not to be possible. libyaml
@@ -28,12 +28,6 @@ class YAML::Scanner < YAML::Reader
   # nesting depth; starting at the floor visits the same possible keys in
   # the same order, so behavior is unchanged.
   @possible_floor = 0
-  # Lower bounds of `mark.line` and `mark.index + 1024` over all possible
-  # simple keys (`Int64::MAX` when there are none). Until the position
-  # passes one of them no key can be stale, so `#stale_simple_keys` has
-  # nothing to do.
-  @stale_key_line = Int64::MAX
-  @stale_key_index = Int64::MAX
   @flow_level = 0
   @scanner_error : ParseException? = nil
 
@@ -52,28 +46,22 @@ class YAML::Scanner < YAML::Reader
   end
 
   # libyaml `PEEK_TOKEN`.
-  @[AlwaysInline]
   def peek_token : Token
-    # A stored error leaves `@token_available` false, so it is raised again
-    # by `#fetch_tokens`.
-    fetch_tokens unless @token_available
-    @tokens.first
-  end
-
-  private def fetch_tokens : Nil
     if error = @scanner_error
       raise error
     end
-    begin
-      fetch_more_tokens
-    rescue ex : ParseException
-      @scanner_error = ex
-      raise ex
+    unless @token_available
+      begin
+        fetch_more_tokens
+      rescue ex : ParseException
+        @scanner_error = ex
+        raise ex
+      end
     end
+    @tokens.first
   end
 
   # libyaml `SKIP_TOKEN`.
-  @[AlwaysInline]
   def skip_token : Nil
     @token_available = false
     @tokens_parsed += 1
@@ -176,35 +164,21 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_stale_simple_keys
-  @[AlwaysInline]
   private def stale_simple_keys : Nil
-    return if @line <= @stale_key_line && @index <= @stale_key_index
-    remove_stale_simple_keys
-  end
-
-  private def remove_stale_simple_keys : Nil
-    stale_key_line = Int64::MAX
-    stale_key_index = Int64::MAX
     i = @possible_floor
     size = @simple_keys.size
     while i < size
       simple_key = @simple_keys.unsafe_fetch(i)
-      if simple_key.possible
-        if simple_key.mark.line < @line || simple_key.mark.index + 1024 < @index
-          if simple_key.required
-            scanner_error("while scanning a simple key", simple_key.mark,
-              "could not find expected ':'")
-          end
-          @simple_keys[i] = simple_key.copy_with(possible: false)
-        else
-          stale_key_line = Math.min(stale_key_line, simple_key.mark.line)
-          stale_key_index = Math.min(stale_key_index, simple_key.mark.index + 1024)
+      if simple_key.possible &&
+         (simple_key.mark.line < @line || simple_key.mark.index + 1024 < @index)
+        if simple_key.required
+          scanner_error("while scanning a simple key", simple_key.mark,
+            "could not find expected ':'")
         end
+        @simple_keys[i] = simple_key.copy_with(possible: false)
       end
       i += 1
     end
-    @stale_key_line = stale_key_line
-    @stale_key_index = stale_key_index
     while @possible_floor < size && !@simple_keys.unsafe_fetch(@possible_floor).possible
       @possible_floor += 1
     end
@@ -218,8 +192,6 @@ class YAML::Scanner < YAML::Reader
       remove_simple_key
       @simple_keys[-1] = simple_key
       @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
-      @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
-      @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index + 1024)
     end
   end
 
@@ -264,7 +236,6 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_unroll_indent
-  @[AlwaysInline]
   private def unroll_indent(column : Int64) : Nil
     return if @flow_level != 0
     while @indent > column
@@ -442,10 +413,6 @@ class YAML::Scanner < YAML::Reader
       skip if @column == 0 && bom?
 
       cache(1)
-      # Fast path: `SKIP` + `CACHE(1)` repeated over a run of whitespace.
-      tabs = @flow_level != 0 || !@simple_key_allowed
-      n = ascii_run(1) { |b| b == ' '.ord || (tabs && b == '\t'.ord) }
-      skip_ascii(n) if n > 0
       while check?(' ') || ((@flow_level != 0 || !@simple_key_allowed) && check?('\t'))
         skip
         cache(1)
@@ -453,12 +420,6 @@ class YAML::Scanner < YAML::Reader
 
       if check?('#')
         until breakz?
-          # Fast path: `SKIP` + `CACHE(1)` repeated over the comment text.
-          n = ascii_run(1) { |b| b >= 0x20 || b == '\t'.ord }
-          if n > 0
-            skip_ascii(n)
-            next
-          end
           skip
           cache(1)
         end
@@ -890,12 +851,6 @@ class YAML::Scanner < YAML::Reader
       leading_blank = blank?
 
       until breakz?
-        # Fast path: `READ` + `CACHE(1)` repeated over a run of the line.
-        n = ascii_run(1) { |b| b >= 0x20 || b == '\t'.ord }
-        if n > 0
-          read_ascii(string, n)
-          next
-        end
         read(string)
         cache(1)
       end
@@ -921,10 +876,6 @@ class YAML::Scanner < YAML::Reader
 
     while true
       cache(1)
-      # Fast path: `SKIP` + `CACHE(1)` repeated over indentation spaces.
-      room = indent == 0 ? Int32::MAX : Math.max(indent - @column, 0_i64).to_i32
-      n = ascii_run(1, room) { |b| b == ' '.ord }
-      skip_ascii(n) if n > 0
       while (indent == 0 || @column < indent) && space?
         skip
         cache(1)
@@ -989,14 +940,6 @@ class YAML::Scanner < YAML::Reader
       leading_blanks = false
 
       until blankz?
-        # Fast path: a run of characters that are neither quotes nor escapes
-        # is `READ` + `CACHE(2)` repeated.
-        n = ascii_run(2) { |b| b > 0x20 && b != quote && (single || b != '\\'.ord) }
-        if n > 0
-          read_ascii(string, n)
-          next
-        end
-
         c = byte
         if single && c == '\''.ord && check?('\'', 1)
           string << '\''
@@ -1155,21 +1098,6 @@ class YAML::Scanner < YAML::Reader
       break if check?('#')
 
       until blankz?
-        # Fast path: a run of characters that need none of the checks below
-        # (no ':' or flow indicator, no pending whitespace to join) is
-        # `READ` + `CACHE(2)` repeated.
-        if !leading_blanks && whitespaces.empty?
-          n = ascii_run(2) do |b|
-            b > 0x20 && b != ':'.ord &&
-              (@flow_level == 0 || !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord))
-          end
-          if n > 0
-            read_ascii(string, n)
-            end_mark = mark
-            next
-          end
-        end
-
         c = byte
         if @flow_level != 0 && c == ':'.ord
           c1 = byte(1)

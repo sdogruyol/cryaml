@@ -110,12 +110,8 @@ class YAML::PullParser
   # Reads the next event.
   def read_next : EventKind
     # As with libyaml, a failed read leaves an empty (NONE) event behind.
-    @event = begin
-      @parser.parse
-    rescue ex
-      @event = Event.new
-      raise ex
-    end
+    @event = Event.new
+    @event = @parser.parse
 
     read_anchor
     @anchors += 1 if @anchor

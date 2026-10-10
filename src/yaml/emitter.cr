@@ -34,9 +34,6 @@ class YAML::Emitter
 
   private DEFAULT_TAG_DIRECTIVES = [{"!", "!"}, {"!!", "tag:yaml.org,2002:"}]
 
-  # Block scalar indentation indicators, indexed by `@best_indent` (2..9).
-  private INDENT_HINTS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
-
   property? unicode : Bool = false
   getter problem : String?
 
@@ -44,9 +41,9 @@ class YAML::Emitter
   @best_indent = 2
   @best_width = 80
   @state = State::STREAM_START
-  @states = Stack(State).new
-  @events = Queue(Event).new
-  @indents = Stack(Int32).new
+  @states = [] of State
+  @events = Deque(Event).new
+  @indents = [] of Int32
   @tag_directives = [] of {String, String}
   @indent = -1
   @flow_level = 0
@@ -86,7 +83,7 @@ class YAML::Emitter
 
   # yaml_emitter_emit
   def emit(event : Event) : Bool
-    @events << event
+    @events.push(event)
     until need_more_events?
       head = @events.first
       analyze_event(head)
@@ -152,7 +149,6 @@ class YAML::Emitter
   end
 
   # yaml_emitter_increase_indent
-  @[AlwaysInline]
   private def increase_indent(flow : Bool, indentless : Bool) : Nil
     @indents.push(@indent)
     if @indent < 0
@@ -416,8 +412,7 @@ class YAML::Emitter
     emit_node(event, false, false, true, false)
   end
 
-  # yaml_emitter_emit_node (inlined: the event is not copied for the call)
-  @[AlwaysInline]
+  # yaml_emitter_emit_node
   private def emit_node(event : Event, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
     @root_context = root
     @sequence_context = sequence
@@ -687,26 +682,6 @@ class YAML::Emitter
 
     i = 0
     while i != length
-      # Fast path: after the first character, printable ASCII characters
-      # other than spaces and the indicators below set no flag. Skip a run
-      # of them, leaving the look-around state as the last one would.
-      if i != 0
-        j = i
-        while j != length && plain_ascii?(s[j])
-          j += 1
-        end
-        if j != i
-          i = j
-          previous_space = false
-          previous_break = false
-          preceded_by_whitespace = false
-          if i != length
-            followed_by_whitespace = Chars.blankz?(s, i + Chars.width(s, i))
-          end
-          next
-        end
-      end
-
       c = s[i]
       if i == 0
         case c
@@ -806,22 +781,6 @@ class YAML::Emitter
     @block_plain_allowed = false if block_indicators
   end
 
-  # Printable ASCII, not a space, and not an indicator that
-  # `analyze_scalar` looks at past the first character: 0x21..0x7E except
-  # `#` `,` `:` `?` `[` `]` `{` `}`, as a bit set over 0x00..0x3F and
-  # 0x40..0x7F.
-  private PLAIN_ASCII_LOW  = 0x7BFFEFF600000000_u64
-  private PLAIN_ASCII_HIGH = 0x57FFFFFFD7FFFFFF_u64
-
-  @[AlwaysInline]
-  private def plain_ascii?(c : UInt8) : Bool
-    if c < 0x40
-      (PLAIN_ASCII_LOW >> c) & 1 != 0
-    else
-      c < 0x80 && (PLAIN_ASCII_HIGH >> (c & 0x3F)) & 1 != 0
-    end
-  end
-
   # yaml_emitter_analyze_event
   private def analyze_event(event : Event) : Nil
     @anchor = Pointer(UInt8).null
@@ -903,32 +862,6 @@ class YAML::Emitter
     i
   end
 
-  # Number of characters at p+i (before *length*) that are ASCII, satisfy
-  # the block, and can be written one byte each before `FLUSH` would flush
-  # the buffer. Loops that WRITE character by character use it to copy such
-  # a run at once, so the buffer is still flushed at the same characters.
-  @[AlwaysInline]
-  private def ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
-    limit = Math.min(length - i, OUTPUT_BUFFER_SIZE - 5 - @pos)
-    n = 0
-    while n < limit
-      b = p[i + n]
-      break unless b < 0x80 && yield b
-      n += 1
-    end
-    n
-  end
-
-  # WRITE repeated over *count* ASCII characters (see `#ascii_run`).
-  @[AlwaysInline]
-  private def write_ascii(p : Pointer(UInt8), i : Int32, count : Int32) : Int32
-    return i if count == 0
-    (@buffer.to_unsafe + @pos).copy_from(p + i, count)
-    @pos += count
-    @column += count
-    i + count
-  end
-
   # WRITE_BREAK
   @[AlwaysInline]
   private def write_break(p : Pointer(UInt8), i : Int32) : Int32
@@ -951,14 +884,6 @@ class YAML::Emitter
       put_break
     end
     while @column < indent
-      # Fast path: PUT repeated over the spaces that fit before a flush.
-      n = Math.min(indent - @column, OUTPUT_BUFFER_SIZE - 5 - @pos)
-      if n > 0
-        (@buffer.to_unsafe + @pos).fill(n, ' '.ord.to_u8)
-        @pos += n
-        @column += n
-        next
-      end
       put(' '.ord.to_u8)
     end
     @whitespace = true
@@ -1061,9 +986,6 @@ class YAML::Emitter
       else
         write_indent if breaks
         i = write(p, i)
-        # Fast path: WRITE repeated over the following characters that would
-        # also take this branch.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
         @indention = false
         spaces = false
         breaks = false
@@ -1101,9 +1023,6 @@ class YAML::Emitter
         write_indent if breaks
         put('\''.ord.to_u8) if p[i] == '\''.ord
         i = write(p, i)
-        # Fast path: WRITE repeated over the following characters that would
-        # also take this branch without a quote to double.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord && b != '\''.ord })
         @indention = false
         spaces = false
         breaks = false
@@ -1185,9 +1104,6 @@ class YAML::Emitter
         spaces = true
       else
         i = write(p, i)
-        # Fast path: WRITE repeated over the following characters that would
-        # also take this branch (printable ASCII, no space, quote or escape).
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b > 0x20 && b < 0x7F && b != '"'.ord && b != '\\'.ord })
         spaces = false
       end
     end
@@ -1201,7 +1117,7 @@ class YAML::Emitter
   # yaml_emitter_write_block_scalar_hints
   private def write_block_scalar_hints(p : Pointer(UInt8), length : Int32) : Nil
     if Chars.space?(p, 0) || Chars.break?(p, 0)
-      write_indicator(INDENT_HINTS[@best_indent], false, false, false)
+      write_indicator(('0'.ord + @best_indent).chr.to_s, false, false, false)
     end
 
     @open_ended = 0
@@ -1254,8 +1170,6 @@ class YAML::Emitter
       else
         write_indent if breaks
         i = write(p, i)
-        # Fast path: WRITE repeated over the rest of the line.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != '\r'.ord && b != '\n'.ord })
         @indention = false
         breaks = false
       end
@@ -1296,9 +1210,6 @@ class YAML::Emitter
           i += Chars.width(p, i)
         else
           i = write(p, i)
-          # Fast path: WRITE repeated over the following characters that
-          # would also take this branch.
-          i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
         end
         @indention = false
         breaks = false
