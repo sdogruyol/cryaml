@@ -444,15 +444,19 @@ class YAML::Reader
     (word | (word &+ 0x0101010101010101_u64) | ((word &- 0x2020202020202020_u64) & ~word)) & 0x8080808080808080_u64
   end
 
-  # Number of bytes before the first one flagged in a nonzero *mask*. Only
-  # little-endian targets load the first byte into the low bits; elsewhere
-  # report none, which just leaves every byte to the slow path.
+  # Number of bytes, in memory order, before the first one flagged in a
+  # nonzero *mask*. The first byte is the lowest one on little-endian targets
+  # and the highest on big-endian ones. There a borrow or carry from a later
+  # byte can also flag an earlier one, which only shortens the prefix: those
+  # bytes then take the per-character path.
   @[AlwaysInline]
   private def printable_ascii_prefix(mask : UInt64) : Int32
-    if IO::ByteFormat::SystemEndian == IO::ByteFormat::LittleEndian
+    # `IO::ByteFormat::SystemEndian` is always `LittleEndian` in Crystal 1.21,
+    # so test the byte order directly; LLVM folds this to a constant.
+    if 1_u16.unsafe_as(StaticArray(UInt8, 2))[0] == 1
       mask.trailing_zeros_count.to_i32 // 8
     else
-      0
+      mask.leading_zeros_count.to_i32 // 8
     end
   end
 
