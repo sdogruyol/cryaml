@@ -220,6 +220,23 @@ class YAML::Builder
   private def utf8_string?(string : String) : Bool
     p = string.to_unsafe
     size = string.bytesize
+    # Fast path for the usual short value: 4 to 16 bytes are all ASCII when
+    # two overlapping words that cover them are.
+    if size >= 4 && size <= 16
+      if size >= 8
+        head = uninitialized UInt64
+        tail = uninitialized UInt64
+        pointerof(head).as(Pointer(UInt8)).copy_from(p, 8)
+        pointerof(tail).as(Pointer(UInt8)).copy_from(p + size - 8, 8)
+        return true if (head | tail) & 0x8080808080808080_u64 == 0
+      else
+        head32 = uninitialized UInt32
+        tail32 = uninitialized UInt32
+        pointerof(head32).as(Pointer(UInt8)).copy_from(p, 4)
+        pointerof(tail32).as(Pointer(UInt8)).copy_from(p + size - 4, 4)
+        return true if (head32 | tail32) & 0x80808080_u32 == 0
+      end
+    end
     i = 0
     while i < size
       # Fast path: skip ASCII, eight bytes at once while they fit. `i` stays
