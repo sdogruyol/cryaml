@@ -91,9 +91,12 @@ class YAML::Emitter
   @single_quoted_allowed = false
   @block_allowed = false
   @scalar_style = ScalarStyle::ANY
-  # Not in libyaml: set by analyze_scalar when the scalar is one simple word
-  # (see `#simple_scalar`), which `#write_plain_word?` copies at once.
-  @ascii_word = false
+  # Not in libyaml: set by analyze_scalar when the scalar is printable
+  # ASCII without breaks and no flag but `flow_indicators` applies to it
+  # (see `#simple_scalar`), and whether it has spaces. `#write_simple_plain?`
+  # copies such a scalar at once.
+  @simple_scalar = false
+  @scalar_spaces = false
 
   def initialize(@io : IO)
     # `@buffer[0, @capacity]` is allocated; `@buffer[0, @pos]` is pending
@@ -530,15 +533,15 @@ class YAML::Emitter
     @state = @states.pop
   end
 
-  # yaml_emitter_emit_scalar. A plain word is written without the
+  # yaml_emitter_emit_scalar. A simple plain scalar is written without the
   # increase_indent/pop pair around process_scalar: the indentation is only
-  # read by line breaks, and a word has none.
+  # read by line breaks, and it has none.
   @[AlwaysInline]
   private def emit_scalar(event : Event*) : Nil
     select_scalar_style(event)
     process_anchor
     process_tag
-    unless write_plain_word?
+    unless write_simple_plain?
       increase_indent(true, false)
       process_scalar
       @indent = @indents.pop
@@ -546,13 +549,21 @@ class YAML::Emitter
     @state = @states.pop
   end
 
-  # The usual case of process_scalar, inlined: a plain one-word ASCII
-  # scalar (see `@ascii_word`) with room for it and a space before it before
-  # the next FLUSH. Writes what write_plain_scalar would.
+  # The usual case of process_scalar, inlined: a plain scalar of printable
+  # ASCII without breaks (see `@simple_scalar`), with room for it and a
+  # space before it before the next FLUSH, and no space past `@best_width`
+  # that write_plain_scalar would break the line at. Writes what
+  # write_plain_scalar would: the scalar as it is.
   @[AlwaysInline]
-  private def write_plain_word? : Bool
+  private def write_simple_plain? : Bool
     length = @scalar_length
-    return false unless @scalar_style.plain? && @ascii_word && length < @write_limit - @pos
+    return false unless @scalar_style.plain? && @simple_scalar && length < @write_limit - @pos
+    if @scalar_spaces && !@simple_key_context
+      # Every column it is written at is at most `@best_width` (the space
+      # put before it included).
+      column = @whitespace ? @column : @column + 1
+      return false unless length <= @best_width - column
+    end
     put(' '.ord.to_u8) unless @whitespace
     copy_bytes(@buffer + @pos, @scalar_value, length)
     @pos &+= length # below @write_limit
@@ -794,7 +805,7 @@ class YAML::Emitter
   private def analyze_scalar(value : Pointer(UInt8), length : Int32) : Nil
     @scalar_value = value
     @scalar_length = length
-    @ascii_word = false
+    @simple_scalar = false
 
     if length == 0
       @multiline = false
@@ -805,14 +816,15 @@ class YAML::Emitter
       return
     end
 
-    simple, spaces = simple_scalar(value, length)
+    simple, spaces, flow_indicators = simple_scalar(value, length)
     if simple
       @multiline = false
-      @flow_plain_allowed = true
+      @flow_plain_allowed = !flow_indicators
       @block_plain_allowed = true
       @single_quoted_allowed = true
       @block_allowed = true
-      @ascii_word = !spaces
+      @simple_scalar = true
+      @scalar_spaces = spaces
       return
     end
 
@@ -999,50 +1011,80 @@ class YAML::Emitter
   end
 
   # Whether `analyze_scalar` would set no flag for the scalar at *s*
-  # (*length* > 0), and whether it has spaces. It sets none when the first
-  # character is in FIRST_ASCII, or is a `-` or `.` followed by a character
-  # in PLAIN_ASCII (not whitespace) other than the start of `---` or `...`,
-  # the others are in PLAIN_ASCII or spaces, and the last isn't a space.
-  # Such spaces set no flag: no break is next to them, and the indicators
-  # that look at them (`#` after one, `:` before one) are not in
-  # PLAIN_ASCII. (Like analyze_scalar, this reads up to s[2]: the value is a
+  # (*length* > 0) but `flow_indicators`, whether it has spaces, and whether
+  # it sets `flow_indicators`. That is the case when the first character is
+  # in FIRST_ASCII, or is a `-` or `.` followed by a character in
+  # PLAIN_ASCII (not whitespace) other than the start of `---` or `...`, the
+  # others are in PLAIN_ASCII, spaces, or flow indicators (`,` `?` `[` `]`
+  # `{` `}`, and `:` unless whitespace follows it), and the last isn't a
+  # space. Such spaces set no flag: no break is next to them, and the
+  # indicators that look at them (`#` after one, `:` before one) are
+  # excluded. (Like analyze_scalar, this reads up to s[2]: the value is a
   # String's bytes, followed by a NUL.)
   @[AlwaysInline]
-  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool, Bool}
     c = s[0]
     unless first_ascii?(c) ||
            ((c == '-'.ord || c == '.'.ord) && plain_ascii?(s[1]) && !(s[1] == c && s[2] == c))
-      return {false, false}
+      return {false, false, false}
     end
-    return {false, false} if s[length - 1] == ' '.ord
+    return {false, false, false} if s[length - 1] == ' '.ord
     return simple_scalar_words(s, length) if length >= 8
     spaces = false
     i = 1
     while i < length
       c = s[i]
       unless plain_ascii?(c)
-        return {false, false} unless c == ' '.ord
+        return simple_scalar_bytes(s, i, length, spaces) unless c == ' '.ord
         spaces = true
       end
       i &+= 1 # below length
     end
-    {true, spaces}
+    {true, spaces, false}
   end
 
-  # The loop of `#simple_scalar` for *length* >= 8, eight bytes at a time:
-  # the words at 0, 8, ... and the last word, which may overlap the one
-  # before. The first byte passed the test in `#simple_scalar`, so it is in
-  # PLAIN_ASCII and changes neither result. Out of line, so it doesn't
-  # weigh on the registers of the inlined short case.
+  # The loop of `#simple_scalar` from *i*, with the spaces found before it,
+  # for a scalar that has other bytes than PLAIN_ASCII and spaces. Out of
+  # line, like `#simple_scalar_words`. (The first byte passed the test in
+  # `#simple_scalar`, so it is in PLAIN_ASCII and changes no result if *i*
+  # is 0.)
   @[NoInline]
-  private def simple_scalar_words(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+  private def simple_scalar_bytes(s : Pointer(UInt8), i : Int32, length : Int32, spaces : Bool) : {Bool, Bool, Bool}
+    flow_indicators = false
+    while i < length
+      c = s[i]
+      unless plain_ascii?(c)
+        if c == ' '.ord
+          spaces = true
+        elsif c == ','.ord || c == '?'.ord || c == '['.ord || c == ']'.ord ||
+              c == '{'.ord || c == '}'.ord || c == ':'.ord
+          # Whitespace after `:` (a space, or the end) makes it a block
+          # indicator too.
+          return {false, false, false} if c == ':'.ord && (i &+ 1 == length || s[i &+ 1] == ' '.ord)
+          flow_indicators = true
+        else
+          return {false, false, false}
+        end
+      end
+      i &+= 1 # below length
+    end
+    {true, spaces, flow_indicators}
+  end
+
+  # `#simple_scalar` for *length* >= 8: eight bytes at a time while they
+  # are in PLAIN_ASCII or spaces (the words at 0, 8, ... and the last word,
+  # which may overlap the one before), then byte by byte from the first
+  # word that isn't. Out of line, so it doesn't weigh on the registers of
+  # the inlined short case.
+  @[NoInline]
+  private def simple_scalar_words(s : Pointer(UInt8), length : Int32) : {Bool, Bool, Bool}
     spaces = 0_u64
     i = 0
     while true
       word = Chars.load_word(s + i)
-      return {false, false} unless plain_or_space_word?(word)
+      return simple_scalar_bytes(s, i, length, spaces != 0) unless plain_or_space_word?(word)
       spaces |= Chars.equal_mask(word, ' '.ord.to_u8)
-      return {true, spaces != 0} if i == length &- 8
+      return {true, spaces != 0, false} if i == length &- 8
       i = Math.min(i &+ 8, length &- 8)
     end
   end
