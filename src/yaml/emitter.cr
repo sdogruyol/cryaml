@@ -486,15 +486,19 @@ class YAML::Emitter
     @state = @states.pop
   end
 
-  # yaml_emitter_emit_scalar
+  # yaml_emitter_emit_scalar. A plain word is written without the
+  # increase_indent/pop pair around process_scalar: the indentation is only
+  # read by line breaks, and a word has none.
   @[AlwaysInline]
   private def emit_scalar(event : Event*) : Nil
     select_scalar_style(event)
     process_anchor
     process_tag
-    increase_indent(true, false)
-    process_scalar unless write_plain_word?
-    @indent = @indents.pop
+    unless write_plain_word?
+      increase_indent(true, false)
+      process_scalar
+      @indent = @indents.pop
+    end
     @state = @states.pop
   end
 
