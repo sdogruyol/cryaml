@@ -59,10 +59,6 @@ class YAML::ByteBuffer
     self
   end
 
-  def write(string : String) : self
-    write(string.to_unsafe, string.bytesize)
-  end
-
   # Appends a single code point encoded as UTF-8.
   def write_utf8(value : UInt32) : self
     if value <= 0x7F
@@ -110,23 +106,25 @@ class YAML::ByteBuffer
     String.new(@bytes.to_unsafe, @size)
   end
 
-  def to_s(io : IO) : Nil
-    io.write(@bytes[0, @size])
-  end
-
   def to_slice : Bytes
     @bytes[0, @size]
   end
 
   @[AlwaysInline]
   private def ensure_capacity(extra : Int32) : Nil
-    needed = @size + extra
-    return if needed <= @bytes.size
-    capacity = Math.max(@bytes.size * 2, 16)
+    needed = @size.to_i64 + extra
+    grow(needed) if needed > @bytes.size
+  end
+
+  # Doubles the storage until *needed* bytes fit, up to the largest `Bytes`
+  # (`Int32::MAX`). Beyond that a scalar couldn't become a `String` anyway.
+  private def grow(needed : Int64) : Nil
+    raise ArgumentError.new("YAML scalar too large") if needed > Int32::MAX
+    capacity = Math.max(@bytes.size.to_i64 * 2, 16_i64)
     while capacity < needed
       capacity *= 2
     end
-    bytes = Bytes.new(capacity)
+    bytes = Bytes.new(Math.min(capacity, Int32::MAX.to_i64).to_i32)
     bytes.to_unsafe.copy_from(@bytes.to_unsafe, @dirty)
     @bytes = bytes
   end
