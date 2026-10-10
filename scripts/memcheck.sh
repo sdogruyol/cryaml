@@ -10,7 +10,9 @@
 # Fails if any valgrind error has an engine method (YAML::Reader, Scanner,
 # EventParser, Emitter, ByteBuffer, Queue, Stack, Chars, PullParser,
 # Builder) among its top frames. Errors entirely inside the stdlib are
-# counted separately: some stdlib code isn't valgrind-clean under gc_none.
+# counted separately: Crystal 1.21's String::Builder#to_s writes its trailing
+# zero byte one past the allocation when the content fills the buffer, and
+# Float::FastFloat reads past short "inf" inputs. Boehm's slack hides both.
 #
 #   scripts/memcheck.sh [OUTPUT_DIR]     (default: .cache/memcheck)
 set -eu

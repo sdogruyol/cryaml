@@ -22,7 +22,7 @@ flowchart LR
 | Line-by-line review | Reader, scanner, parser and emitter compared with libyaml function by function. Four divergences found and fixed, each reproduced first (NUL in `%TAG` prefixes, `yaml_check_utf8` semantics in `Builder`, flush order on IO errors, Int32 overflows on inputs above 1 GiB). The later performance fast paths were reviewed on their own against the code they replace: no differences, including the IO write sequence of the emitter (sizes and contents of every write), and two planted off-by-one bugs were caught. |
 | Fuzzing | `fuzz/fuzz.cr` mutates the corpus (including mutations at the reader's 16 KiB chunk boundaries) and generates Builder scripts; both sides run as separate processes so crashes and hangs are caught, and every difference is minimized. Overnight campaign on 2026-10-09/10: about 1.22 billion cases in eight shards. Findings: the `%TAG` `%00` divergence (fixed, also found by the review), a stack overflow in the stdlib's own `YAML::Any#hash` on self-referencing aliases that libyaml's binding hits too (fixed upstream in 1.21.1), and tags whose `%`-escapes decode to overlong UTF-8, which only differ when re-emitted through `Builder` (the documented malformed-UTF-8 difference). Nothing else. A nightly workflow runs four more shards. Two deliberately planted bugs were found within the first batch. |
 | Coverage | kcov, enforced per file in CI: scanner 100%, Builder and PullParser 100%, parser 99.2%, reader 98.7%, emitter 95.0%. The rest is unreachable through the public API (emitter directives and canonical mode, defensive buffer growth). |
-| Memory safety | valgrind memcheck with `-Dgc_none` over the spec suite and 20,000 fuzzer-generated cases: no errors in engine code (the reports that remain are inside the stdlib under gc_none). Runs in CI. |
+| Memory safety | valgrind memcheck with `-Dgc_none` over the spec suite and 20,000 fuzzer-generated cases: no errors in engine code. The reports that remain come from two stdlib bugs that Boehm's allocation slack hides (see Findings). Runs in CI. |
 | Upstream stdlib | cryaml loads the stdlib's own Any, Nodes, schema and serialization layers, so fixes like 1.21.1's `YAML::Any#hash` fix apply automatically. CI runs `spec/std/yaml` of 1.21.0, the latest release and nightly against cryaml, and fails if a file cryaml replaces changes upstream. |
 | Real projects | shards, ameba, crystal-i18n, totem and Invidious run their test suites on cryaml with results identical to the stdlib's, failures included (2,941 examples; the failures need fossil/hg, Redis or a git submodule, in both); shards, ameba and i18n run in CI. Unmodified code uses cryaml through `shim/yaml.cr`. |
 | Mixed requires | Loading the stdlib's `yaml` next to cryaml fails to compile, with an explanation when the stdlib came first. |
@@ -49,8 +49,12 @@ flowchart LR
 Findings from Phase 0 worth raising with core, independent of cryaml:
 
 - **libyaml differs by platform today.** Crystal 1.21.0's macOS tarball
-  links libyaml 0.1.6 by default; Linux distros and Homebrew ship 0.2.5.
-  In the first macOS CI run, comparing against the default-linked 0.1.6
+  embeds a static libyaml 0.1.6 (`distribution-scripts` pins
+  `default_version '0.1.6'` in `omnibus/config/software/libyaml.rb`), and
+  programs built with that package link it even with Homebrew's 0.2.5
+  installed (`YAML.libyaml_version` prints 0.1.6 on `macos-15` after
+  `brew install libyaml`). Linux packages embed no libyaml, so programs there
+  get the distro's 0.2.5. In the first macOS CI run, comparing against 0.1.6
   failed 534 of 5,561 examples (error text, `%YAML 1.2`, `:` in flow plain
   scalars, emitter output such as `--- \n...` for empty documents), so stdlib
   YAML already behaves differently on macOS.
@@ -63,6 +67,17 @@ Findings from Phase 0 worth raising with core, independent of cryaml:
 - **`YAML::Any#hash` on self-referencing aliases** overflowed the stack in
   1.21.0 (fixed in 1.21.1); the fuzzer hit it within minutes, which argues
   for running it upstream.
+- **Two out-of-bounds accesses in the stdlib**, found because memcheck runs
+  with `-Dgc_none`, where Boehm's allocation slack doesn't hide them (both
+  still on master):
+  - `String::Builder#increase_capacity_by` doesn't reserve the trailing zero
+    byte that `#initialize` reserves, so when the content fills the buffer
+    exactly, `#to_s` writes one byte past the allocation.
+    `String.build(43) { |io| io << "x" * 44 }` repeated 1,000 times aborts
+    with glibc's "corrupted size vs. prev_size" under `-Dgc_none`.
+  - `Float::FastFloat`'s `parse_infnan` compares `"inf"` outside the
+    `last - first >= 3` guard that upstream fast_float has, reading up to two
+    bytes past short inputs such as `"-x".to_f64?`.
 
 ## Phase 2: stdlib PRs
 
