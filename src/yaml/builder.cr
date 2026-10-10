@@ -205,6 +205,11 @@ class YAML::Builder
     end
 
     slot = @emitter.event_slot
+    # Events emitted here have no marks, and a slot's marks are always zero
+    # (see `Emitter#event_slot`): taking them from the slot lets LLVM drop
+    # their stores.
+    event.start_mark = slot.value.start_mark
+    event.end_mark = slot.value.end_mark
     slot.value = event
     unless @emitter.emit(slot)
       raise YAML::Error.new("Error emitting #{event_name}: #{@emitter.problem}")

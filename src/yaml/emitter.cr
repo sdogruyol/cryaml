@@ -111,7 +111,8 @@ class YAML::Emitter
   # Where the caller builds the next event before passing it to `#emit`:
   # the free slot at the tail of the queue. libyaml's ENQUEUE copies the
   # caller's event into the queue; building it in place saves copying the
-  # 128-byte struct.
+  # 128-byte struct. The slot's marks are zero: the queue's memory starts
+  # zeroed, and the events built in it (by `Builder`) have no marks.
   @[AlwaysInline]
   def event_slot : Event*
     @events.tail_slot
