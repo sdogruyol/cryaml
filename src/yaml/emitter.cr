@@ -190,23 +190,30 @@ class YAML::Emitter
   # yaml_emitter_need_more_events
   private def need_more_events? : Bool
     return true if @events.empty?
-    accumulate = case @events.first.kind
+    head = @events.first_pointer
+    accumulate = case head.value.kind
                  when .document_start? then 1
                  when .sequence_start? then 2
                  when .mapping_start?  then 3
                  else                       return false
                  end
-    return false if @events.size > accumulate
-    level = 0
-    @events.each do |event|
-      case event.kind
+    size = @events.size
+    return false if size > accumulate
+    # The head starts a document or collection, so the level is 1 after it.
+    # The queued events are `head[0, size]`, at most 3, so neither `level`
+    # nor `i` can overflow.
+    level = 1
+    i = 1
+    while i < size
+      case head[i].kind
       when .stream_start?, .document_start?, .sequence_start?, .mapping_start?
-        level += 1
+        level &+= 1
       when .stream_end?, .document_end?, .sequence_end?, .mapping_end?
-        level -= 1
+        level &-= 1
       else
       end
       return false if level == 0
+      i &+= 1
     end
     true
   end
