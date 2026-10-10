@@ -39,12 +39,13 @@ class YAML::EventParser < YAML::Scanner
     END
   end
 
-  DEFAULT_TAG_DIRECTIVES = [{"!", "!"}, {"!!", "tag:yaml.org,2002:"}]
+  DEFAULT_TAG_DIRECTIVES = { {"!", "!"}, {"!!", "tag:yaml.org,2002:"} }
 
   @state = State::STREAM_START
   @states = Stack(State).new
   @marks = Stack(Mark).new
-  @tag_directives = [] of {String, String}
+  # The %TAG directives of the current document (see `#process_directives`).
+  @tag_directives : Array({String, String})? = nil
   @error : ParseException? = nil
 
   # The current event. The parser builds each event right here, where
@@ -184,7 +185,7 @@ class YAML::EventParser < YAML::Scanner
       skip_token
       implicit = false
     end
-    @tag_directives.clear
+    @tag_directives = nil
     @state = State::DOCUMENT_START
     @event = Event.new(EventKind::DOCUMENT_END, start_mark, end_mark, implicit: implicit)
   end
@@ -238,12 +239,7 @@ class YAML::EventParser < YAML::Scanner
       if tag_handle.empty?
         tag = tag_suffix
       else
-        @tag_directives.each do |(handle, prefix)|
-          if handle == tag_handle
-            tag = prefix + tag_suffix
-            break
-          end
-        end
+        tag = tag_prefix(tag_handle).try { |prefix| prefix + tag_suffix }
         unless tag
           error("found undefined tag handle", tag_mark, "while parsing a node", start_mark)
         end
@@ -576,28 +572,39 @@ class YAML::EventParser < YAML::Scanner
         version_directive = {token.major, token.minor}
       else
         value = {token.handle, token.prefix}
-        append_tag_directive(value, false, token.start_mark)
+        check_tag_directive(tag_directives, value, token.start_mark)
         (tag_directives ||= [] of {String, String}) << value
       end
       skip_token
       token = peek
     end
 
-    DEFAULT_TAG_DIRECTIVES.each do |value|
-      append_tag_directive(value, true, token.start_mark)
-    end
-
+    # libyaml appends the default directives to the document's here, except
+    # those whose handles it redefines; `#tag_prefix` looks them up after
+    # the document's own instead, which finds the same prefixes.
+    @tag_directives = tag_directives
     {version_directive, tag_directives}
   end
 
-  # yaml_parser_append_tag_directive
-  private def append_tag_directive(value : {String, String}, allow_duplicates : Bool, mark : Mark) : Nil
-    @tag_directives.each do |(handle, _)|
-      if handle == value[0]
-        return if allow_duplicates
-        error("found duplicate %TAG directive", mark)
-      end
+  # yaml_parser_append_tag_directive (without `allow_duplicates`): checks
+  # *value* against the %TAG directives read so far.
+  private def check_tag_directive(tag_directives : Array({String, String})?, value : {String, String}, mark : Mark) : Nil
+    tag_directives.try &.each do |(handle, _)|
+      error("found duplicate %TAG directive", mark) if handle == value[0]
     end
-    @tag_directives << value
+  end
+
+  # The prefix that the current document's %TAG directives, or else the default
+  # ones, give to *handle* (the search of libyaml's `parser->tag_directives`
+  # in `yaml_parser_parse_node`).
+  @[NoInline]
+  private def tag_prefix(handle : String) : String?
+    @tag_directives.try &.each do |(directive_handle, prefix)|
+      return prefix if directive_handle == handle
+    end
+    DEFAULT_TAG_DIRECTIVES.each do |(directive_handle, prefix)|
+      return prefix if directive_handle == handle
+    end
+    nil
   end
 end
