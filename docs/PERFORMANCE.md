@@ -89,24 +89,26 @@ on both sides (Linux x86_64, `VmHWM` via `bin/bench-* --rss`: 31.3-31.4 MB on
 both for the 1 MB manifests, three runs each); individual runs can move by a
 few MB depending on when the GC collects.
 
-Crystal heap allocated per `YAML.parse_all` is slightly higher with cryaml
-(Linux x86_64, KB):
+Crystal heap allocated per `YAML.parse_all` is about the same as with the
+binding, slightly higher (Linux x86_64, KB):
 
 | Workload | stdlib (libyaml) | cryaml |
 | --- | ---: | ---: |
-| small config | 9.0 | 12.4 |
-| helm values | 78.7 | 127.8 |
-| manifests 100 KB | 1013.0 | 1063.6 |
-| manifests 1 MB | 9979.8 | 10030.3 |
-| deep nesting | 1851.0 | 2021.8 |
-| flow heavy | 3948.8 | 4009.3 |
+| small config | 9.0 | 10.4 |
+| helm values | 78.7 | 79.8 |
+| manifests 100 KB | 1013.1 | 1015.1 |
+| manifests 1 MB | 9979.9 | 9982.0 |
+| deep nesting | 1851.0 | 1965.0 |
+| flow heavy | 3948.9 | 3959.5 |
 
-libyaml's own buffers are malloc'ed outside the GC and don't show up on the
-stdlib side; cryaml's equivalents (a 16 KB raw chunk and a decode buffer of
-up to 48 KB, smaller for short strings) are ordinary GC memory, so the
-difference is roughly constant. On the bare event walk cryaml creates each
-scalar's `String` while scanning, the binding only when `PullParser#value` is
-called; code that skips values pays for strings it never reads.
+libyaml's own state is malloc'ed outside the GC and doesn't show up on the
+stdlib side; cryaml's is ordinary GC memory (about 1 KB of scanner and parser
+state per parser, and the token queue, which the deep document's runs of
+300 BLOCK-END tokens grow to 512 tokens). A `String` in UTF-8 is validated
+in place, so no decode buffer is allocated for it. On the bare event walk
+cryaml creates each scalar's `String` while scanning, the binding only when
+`PullParser#value` is called; code that skips values pays for strings it
+never reads.
 
 ## Reproduce
 

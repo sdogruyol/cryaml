@@ -57,9 +57,10 @@ text.
 
 - **Chunked decoding.** libyaml validates input in 16 KiB raw chunks, so an
   encoding error deep in a file surfaces at a specific point of the event
-  stream. The reader keeps the same chunking (for `String` input it moves a
-  window over the string instead of copying it), so errors appear at the same
-  event.
+  stream. The reader keeps the same chunking (a `String` in UTF-8 is
+  validated in place, chunk by chunk, instead of being copied; only its last
+  few characters move to a padded buffer at the end), so errors appear at
+  the same event.
 - **Reader errors at line 1, column 1.** libyaml never sets a position for
   encoding errors and the stdlib reported its zeroed mark. cryaml does too.
 - **Sticky errors.** After a failure every further `read_next` raises the same
@@ -87,10 +88,22 @@ The hot loops keep libyaml's structure but do less per character:
 - where the C code does `READ`/`SKIP` + `CACHE`, or `WRITE` + `FLUSH`, per
   character, the scanner and emitter copy runs of ASCII at once. Runs stop
   before a refill or flush would happen, so those still happen at the same
-  characters;
+  characters. Indentation, plain scalars in the block context and quoted
+  scalars are scanned eight bytes at a time (SWAR flags; on big-endian
+  targets a run can only end early);
+- single-line plain scalars are taken straight from the input string (one
+  copy, with their character count, so `String#size` needn't rescan them),
+  and a simple key (`key:`) is recognized before the general plain scalar
+  loop is set up;
+- the parser builds each event in place, where `PullParser` reads it, and
+  `SKIP_TOKEN` leaves the next token available unless a simple key is
+  pending (the re-check libyaml makes there is a no-op);
 - bounds on the live simple keys make most stale-key checks free;
 - `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call.
-  Dequeued slots are cleared so their strings can be collected.
+  Dequeued event slots are cleared so their strings can be collected; token
+  slots are not (as in libyaml, the strings live on in events);
+- position, index and token counters use wrapping arithmetic where they
+  provably cannot overflow.
 
 ### Deliberate differences from libyaml
 
