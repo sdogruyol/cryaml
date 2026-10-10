@@ -4,7 +4,18 @@
 # UTF-8 output only. Errors make `#emit` return false and set `#problem`,
 # like `yaml_emitter_emit`.
 class YAML::Emitter
+  # libyaml's output buffer size: the buffer is flushed when fewer than 5
+  # bytes of it are free (FLUSH), so the IO receives writes of these sizes.
   OUTPUT_BUFFER_SIZE = 16384
+
+  # libyaml mallocs its 16 KiB buffer outside the GC; here it is GC memory,
+  # allocated per emitter, and most outputs (configs, small objects) are
+  # much smaller. So the buffer starts at 1 KiB and grows to
+  # OUTPUT_BUFFER_SIZE in one step when that fills up (in one step: growing
+  # gradually allocated more in total for large outputs, measured). Flushes
+  # still happen only when the full 16 KiB would be used, so the IO sees the
+  # same writes.
+  private INITIAL_BUFFER_SIZE = 1024
 
   # yaml_emitter_state_t
   enum State
@@ -77,17 +88,44 @@ class YAML::Emitter
   @single_quoted_allowed = false
   @block_allowed = false
   @scalar_style = ScalarStyle::ANY
+  # Not in libyaml: set by analyze_scalar when the scalar is one simple word
+  # (see `#simple_scalar`), which `#write_plain_word?` copies at once.
+  @ascii_word = false
 
   def initialize(@io : IO)
-    @buffer = Bytes.new(OUTPUT_BUFFER_SIZE)
+    # `@buffer[0, @capacity]` is allocated; `@buffer[0, @pos]` is pending
+    # output. FLUSH (or growing) is due once `@pos` reaches `@write_limit`,
+    # `@capacity - 5`, kept to make that test a single comparison.
+    @capacity = INITIAL_BUFFER_SIZE
+    @write_limit = @capacity - 5
+    @buffer = Pointer(UInt8).malloc(@capacity)
     @pos = 0
   end
 
-  # yaml_emitter_emit
-  def emit(event : Event) : Bool
-    @events << event
+  # yaml_emitter_emit. *event* is only read during the call; the queue keeps
+  # a copy. Like libyaml, the functions below take a pointer to the event
+  # (`yaml_event_t *`): *event* itself, or the head of the queue.
+  def emit(event : Event*) : Bool
+    # Fast path: with nothing queued, an event that needs no lookahead (all
+    # but DOCUMENT-START, SEQUENCE-START and MAPPING-START) would be queued
+    # and then processed and dequeued at once by the loop below; skip the
+    # queue.
+    if @events.empty? && !lookahead?(event.value.kind)
+      begin
+        analyze_event(event)
+        state_machine(event)
+      rescue Failure
+        # libyaml leaves the failed event at the head of the queue.
+        @events << event.value
+        return false
+      end
+      return true
+    end
+
+    @events << event.value
     until need_more_events?
-      head = @events.first
+      # The state machine reads the queue but doesn't modify it.
+      head = @events.first_pointer
       analyze_event(head)
       state_machine(head)
       @events.shift
@@ -97,6 +135,12 @@ class YAML::Emitter
     false
   end
 
+  # Whether `need_more_events?` may wait for more events after *kind*.
+  @[AlwaysInline]
+  private def lookahead?(kind : EventKind) : Bool
+    kind.document_start? || kind.sequence_start? || kind.mapping_start?
+  end
+
   # yaml_emitter_flush (writer.c). Like libyaml, the buffer is reset before
   # writing, so an IO that raises drops the bytes instead of having them
   # written again by the next flush.
@@ -104,7 +148,7 @@ class YAML::Emitter
     if @pos > 0
       size = @pos
       @pos = 0
-      @io.write_string(@buffer[0, size])
+      @io.write_string(Slice.new(@buffer, size))
     end
     true
   end
@@ -161,8 +205,9 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_state_machine
-  private def state_machine(event : Event) : Nil
+  # yaml_emitter_state_machine (inlined: a jump table)
+  @[AlwaysInline]
+  private def state_machine(event : Event*) : Nil
     case @state
     in .stream_start?               then emit_stream_start(event)
     in .first_document_start?       then emit_document_start(event, true)
@@ -186,9 +231,9 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_stream_start
-  private def emit_stream_start(event : Event) : Nil
+  private def emit_stream_start(event : Event*) : Nil
     @open_ended = 0
-    if event.kind.stream_start?
+    if event.value.kind.stream_start?
       @best_indent = 2 if @best_indent < 2 || @best_indent > 9
       @best_width = 80 if @best_width >= 0 && @best_width <= @best_indent * 2
       @best_width = Int32::MAX if @best_width < 0
@@ -203,10 +248,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_document_start
-  private def emit_document_start(event : Event, first : Bool) : Nil
-    if event.kind.document_start?
-      version = event.version_directive
-      directives = event.tag_directives
+  private def emit_document_start(event : Event*, first : Bool) : Nil
+    if event.value.kind.document_start?
+      version = event.value.version_directive
+      directives = event.value.tag_directives
       has_directives = !directives.nil? && !directives.empty?
 
       analyze_version_directive(version) if version
@@ -216,7 +261,7 @@ class YAML::Emitter
       end
       DEFAULT_TAG_DIRECTIVES.each { |directive| append_tag_directive(directive, true) }
 
-      implicit = event.implicit?
+      implicit = event.value.implicit?
       implicit = false if !first || @canonical
 
       if (version || has_directives) && @open_ended != 0
@@ -253,7 +298,7 @@ class YAML::Emitter
       @state = State::DOCUMENT_CONTENT
       @open_ended = 0
       return
-    elsif event.kind.stream_end?
+    elsif event.value.kind.stream_end?
       # This can happen if a block scalar with trailing empty lines
       # is at the end of the stream.
       if @open_ended == 2
@@ -269,16 +314,16 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_document_content
-  private def emit_document_content(event : Event) : Nil
+  private def emit_document_content(event : Event*) : Nil
     @states.push(State::DOCUMENT_END)
     emit_node(event, true, false, false, false)
   end
 
   # yaml_emitter_emit_document_end
-  private def emit_document_end(event : Event) : Nil
-    if event.kind.document_end?
+  private def emit_document_end(event : Event*) : Nil
+    if event.value.kind.document_end?
       write_indent
-      if !event.implicit?
+      if !event.value.implicit?
         write_indicator("...", true, false, false)
         @open_ended = 0
         write_indent
@@ -294,14 +339,14 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_sequence_item
-  private def emit_flow_sequence_item(event : Event, first : Bool) : Nil
+  private def emit_flow_sequence_item(event : Event*, first : Bool) : Nil
     if first
       write_indicator("[", true, true, false)
       increase_indent(true, false)
       @flow_level += 1
     end
 
-    if event.kind.sequence_end?
+    if event.value.kind.sequence_end?
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
@@ -320,14 +365,14 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_mapping_key
-  private def emit_flow_mapping_key(event : Event, first : Bool) : Nil
+  private def emit_flow_mapping_key(event : Event*, first : Bool) : Nil
     if first
       write_indicator("{", true, true, false)
       increase_indent(true, false)
       @flow_level += 1
     end
 
-    if event.kind.mapping_end?
+    if event.value.kind.mapping_end?
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
@@ -342,7 +387,7 @@ class YAML::Emitter
     write_indicator(",", false, false, false) unless first
     write_indent if @canonical || @column > @best_width
 
-    if !@canonical && check_simple_key?
+    if !@canonical && check_simple_key?(event)
       @states.push(State::FLOW_MAPPING_SIMPLE_VALUE)
       emit_node(event, false, false, true, true)
     else
@@ -353,7 +398,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_mapping_value
-  private def emit_flow_mapping_value(event : Event, simple : Bool) : Nil
+  private def emit_flow_mapping_value(event : Event*, simple : Bool) : Nil
     if simple
       write_indicator(":", false, false, false)
     else
@@ -365,10 +410,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_sequence_item
-  private def emit_block_sequence_item(event : Event, first : Bool) : Nil
+  private def emit_block_sequence_item(event : Event*, first : Bool) : Nil
     increase_indent(false, @mapping_context && !@indention) if first
 
-    if event.kind.sequence_end?
+    if event.value.kind.sequence_end?
       @indent = @indents.pop
       @state = @states.pop
       return
@@ -381,10 +426,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_mapping_key
-  private def emit_block_mapping_key(event : Event, first : Bool) : Nil
+  private def emit_block_mapping_key(event : Event*, first : Bool) : Nil
     increase_indent(false, false) if first
 
-    if event.kind.mapping_end?
+    if event.value.kind.mapping_end?
       @indent = @indents.pop
       @state = @states.pop
       return
@@ -392,7 +437,7 @@ class YAML::Emitter
 
     write_indent
 
-    if check_simple_key?
+    if check_simple_key?(event)
       @states.push(State::BLOCK_MAPPING_SIMPLE_VALUE)
       emit_node(event, false, false, true, true)
     else
@@ -403,7 +448,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_block_mapping_value
-  private def emit_block_mapping_value(event : Event, simple : Bool) : Nil
+  private def emit_block_mapping_value(event : Event*, simple : Bool) : Nil
     if simple
       write_indicator(":", false, false, false)
     else
@@ -414,15 +459,15 @@ class YAML::Emitter
     emit_node(event, false, false, true, false)
   end
 
-  # yaml_emitter_emit_node (inlined: the event is not copied for the call)
+  # yaml_emitter_emit_node
   @[AlwaysInline]
-  private def emit_node(event : Event, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
+  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool) : Nil
     @root_context = root
     @sequence_context = sequence
     @mapping_context = mapping
     @simple_key_context = simple_key
 
-    case event.kind
+    case event.value.kind
     when .alias?          then emit_alias
     when .scalar?         then emit_scalar(event)
     when .sequence_start? then emit_sequence_start(event)
@@ -440,21 +485,38 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_scalar
-  private def emit_scalar(event : Event) : Nil
+  @[AlwaysInline]
+  private def emit_scalar(event : Event*) : Nil
     select_scalar_style(event)
     process_anchor
     process_tag
     increase_indent(true, false)
-    process_scalar
+    process_scalar unless write_plain_word?
     @indent = @indents.pop
     @state = @states.pop
   end
 
+  # The usual case of process_scalar, inlined: a plain one-word ASCII
+  # scalar (see `@ascii_word`) with room for it and a space before it before
+  # the next FLUSH. Writes what write_plain_scalar would.
+  @[AlwaysInline]
+  private def write_plain_word? : Bool
+    length = @scalar_length
+    return false unless @scalar_style.plain? && @ascii_word && length < @write_limit - @pos
+    put(' '.ord.to_u8) unless @whitespace
+    (@buffer + @pos).copy_from(@scalar_value, length)
+    @pos &+= length # below @write_limit
+    @column += length
+    @whitespace = false
+    @indention = false
+    true
+  end
+
   # yaml_emitter_emit_sequence_start
-  private def emit_sequence_start(event : Event) : Nil
+  private def emit_sequence_start(event : Event*) : Nil
     process_anchor
     process_tag
-    if @flow_level > 0 || @canonical || event.sequence_style.flow? || check_empty_sequence?
+    if @flow_level > 0 || @canonical || event.value.sequence_style.flow? || check_empty_sequence?
       @state = State::FLOW_SEQUENCE_FIRST_ITEM
     else
       @state = State::BLOCK_SEQUENCE_FIRST_ITEM
@@ -462,10 +524,10 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_mapping_start
-  private def emit_mapping_start(event : Event) : Nil
+  private def emit_mapping_start(event : Event*) : Nil
     process_anchor
     process_tag
-    if @flow_level > 0 || @canonical || event.mapping_style.flow? || check_empty_mapping?
+    if @flow_level > 0 || @canonical || event.value.mapping_style.flow? || check_empty_mapping?
       @state = State::FLOW_MAPPING_FIRST_KEY
     else
       @state = State::BLOCK_MAPPING_FIRST_KEY
@@ -484,10 +546,11 @@ class YAML::Emitter
     @events[0].kind.mapping_start? && @events[1].kind.mapping_end?
   end
 
-  # yaml_emitter_check_simple_key
-  private def check_simple_key? : Bool
+  # yaml_emitter_check_simple_key. *event* is the event being emitted: the
+  # head of the queue, or not queued at all (see `#emit`).
+  private def check_simple_key?(event : Event*) : Bool
     length = 0_i64
-    case @events.first.kind
+    case event.value.kind
     when .alias?
       length += @anchor_length
     when .scalar?
@@ -506,11 +569,12 @@ class YAML::Emitter
   end
 
   # yaml_emitter_select_scalar_style
-  private def select_scalar_style(event : Event) : Nil
-    style = event.scalar_style
+  @[AlwaysInline]
+  private def select_scalar_style(event : Event*) : Nil
+    style = event.value.scalar_style
     no_tag = @tag_handle.null? && @tag_suffix.null?
 
-    if no_tag && !event.plain_implicit? && !event.quoted_implicit?
+    if no_tag && !event.value.plain_implicit? && !event.value.quoted_implicit?
       error("neither tag nor implicit flags are specified")
     end
 
@@ -525,7 +589,7 @@ class YAML::Emitter
       if @scalar_length == 0 && (@flow_level > 0 || @simple_key_context)
         style = ScalarStyle::SINGLE_QUOTED
       end
-      style = ScalarStyle::SINGLE_QUOTED if no_tag && !event.plain_implicit?
+      style = ScalarStyle::SINGLE_QUOTED if no_tag && !event.value.plain_implicit?
     end
 
     if style.single_quoted?
@@ -538,7 +602,7 @@ class YAML::Emitter
       end
     end
 
-    if no_tag && !event.quoted_implicit? && !style.plain?
+    if no_tag && !event.value.quoted_implicit? && !style.plain?
       @tag_handle = "!".to_unsafe
       @tag_handle_length = 1
     end
@@ -546,14 +610,16 @@ class YAML::Emitter
     @scalar_style = style
   end
 
-  # yaml_emitter_process_anchor
+  # yaml_emitter_process_anchor (inlined: there usually is none)
+  @[AlwaysInline]
   private def process_anchor : Nil
     return if @anchor.null?
     write_indicator(@anchor_alias ? "*" : "&", true, false, false)
     write_anchor(@anchor, @anchor_length)
   end
 
-  # yaml_emitter_process_tag
+  # yaml_emitter_process_tag (inlined: there usually is none)
+  @[AlwaysInline]
   private def process_tag : Nil
     return if @tag_handle.null? && @tag_suffix.null?
     if !@tag_handle.null?
@@ -644,8 +710,39 @@ class YAML::Emitter
     @tag_suffix_length = size
   end
 
-  # yaml_emitter_analyze_scalar
+  # yaml_emitter_analyze_scalar. Inlined up to the fast path; the general
+  # case is in `#analyze_scalar_characters`.
+  @[AlwaysInline]
   private def analyze_scalar(value : Pointer(UInt8), length : Int32) : Nil
+    @scalar_value = value
+    @scalar_length = length
+    @ascii_word = false
+
+    if length == 0
+      @multiline = false
+      @flow_plain_allowed = false
+      @block_plain_allowed = true
+      @single_quoted_allowed = true
+      @block_allowed = false
+      return
+    end
+
+    simple, spaces = simple_scalar(value, length)
+    if simple
+      @multiline = false
+      @flow_plain_allowed = true
+      @block_plain_allowed = true
+      @single_quoted_allowed = true
+      @block_allowed = true
+      @ascii_word = !spaces
+      return
+    end
+
+    analyze_scalar_characters(value, length)
+  end
+
+  # The rest of yaml_emitter_analyze_scalar (*length* > 0).
+  private def analyze_scalar_characters(value : Pointer(UInt8), length : Int32) : Nil
     block_indicators = false
     flow_indicators = false
     line_breaks = false
@@ -660,18 +757,6 @@ class YAML::Emitter
 
     previous_space = false
     previous_break = false
-
-    @scalar_value = value
-    @scalar_length = length
-
-    if length == 0
-      @multiline = false
-      @flow_plain_allowed = false
-      @block_plain_allowed = true
-      @single_quoted_allowed = true
-      @block_allowed = false
-      return
-    end
 
     s = value
     if (s[0] == '-'.ord && s[1] == '-'.ord && s[2] == '-'.ord) ||
@@ -691,7 +776,7 @@ class YAML::Emitter
       if i != 0
         j = i
         while j != length && plain_ascii?(s[j])
-          j += 1
+          j &+= 1 # below length
         end
         if j != i
           i = j
@@ -820,8 +905,54 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_analyze_event
-  private def analyze_event(event : Event) : Nil
+  # The characters of PLAIN_ASCII that can't start an indicator at the
+  # start of a scalar (or `---` or `...`): all but `!` `"` `%` `&` `'` `*`
+  # `-` `.` `>` `@` `` ` `` `|`.
+  private FIRST_ASCII_LOW  = 0x3BFF8B1000000000_u64
+  private FIRST_ASCII_HIGH = 0x47FFFFFED7FFFFFE_u64
+
+  @[AlwaysInline]
+  private def first_ascii?(c : UInt8) : Bool
+    if c < 0x40
+      (FIRST_ASCII_LOW >> c) & 1 != 0
+    else
+      c < 0x80 && (FIRST_ASCII_HIGH >> (c & 0x3F)) & 1 != 0
+    end
+  end
+
+  # Whether `analyze_scalar` would set no flag for the scalar at *s*
+  # (*length* > 0), and whether it has spaces. It sets none when the first
+  # character is in FIRST_ASCII, or is a `-` or `.` followed by a character
+  # in PLAIN_ASCII (not whitespace) other than the start of `---` or `...`,
+  # the others are in PLAIN_ASCII or spaces, and the last isn't a space.
+  # Such spaces set no flag: no break is next to them, and the indicators
+  # that look at them (`#` after one, `:` before one) are not in
+  # PLAIN_ASCII. (Like analyze_scalar, this reads up to s[2]: the value is a
+  # String's bytes, followed by a NUL.)
+  @[AlwaysInline]
+  private def simple_scalar(s : Pointer(UInt8), length : Int32) : {Bool, Bool}
+    c = s[0]
+    unless first_ascii?(c) ||
+           ((c == '-'.ord || c == '.'.ord) && plain_ascii?(s[1]) && !(s[1] == c && s[2] == c))
+      return {false, false}
+    end
+    return {false, false} if s[length - 1] == ' '.ord
+    spaces = false
+    i = 1
+    while i < length
+      c = s[i]
+      unless plain_ascii?(c)
+        return {false, false} unless c == ' '.ord
+        spaces = true
+      end
+      i &+= 1 # below length
+    end
+    {true, spaces}
+  end
+
+  # yaml_emitter_analyze_event (inlined: mostly a few stores)
+  @[AlwaysInline]
+  private def analyze_event(event : Event*) : Nil
     @anchor = Pointer(UInt8).null
     @anchor_length = 0
     @tag_handle = Pointer(UInt8).null
@@ -831,40 +962,54 @@ class YAML::Emitter
     @scalar_value = Pointer(UInt8).null
     @scalar_length = 0
 
-    case event.kind
+    case event.value.kind
     when .alias?
-      analyze_anchor(event.anchor || "", true)
+      analyze_anchor(event.value.anchor || "", true)
     when .scalar?
-      if anchor = event.anchor
+      if anchor = event.value.anchor
         analyze_anchor(anchor, false)
       end
-      if (tag = event.tag) && (@canonical || (!event.plain_implicit? && !event.quoted_implicit?))
+      if (tag = event.value.tag) && (@canonical || (!event.value.plain_implicit? && !event.value.quoted_implicit?))
         analyze_tag(tag)
       end
-      analyze_scalar(event.value.to_unsafe, event.value.bytesize)
+      value = event.value.value
+      analyze_scalar(value.to_unsafe, value.bytesize)
     when .sequence_start?, .mapping_start?
-      if anchor = event.anchor
+      if anchor = event.value.anchor
         analyze_anchor(anchor, false)
       end
-      if (tag = event.tag) && (@canonical || !event.implicit?)
+      if (tag = event.value.tag) && (@canonical || !event.value.implicit?)
         analyze_tag(tag)
       end
     else
     end
   end
 
-  # FLUSH
+  # FLUSH: flushes when fewer than 5 of OUTPUT_BUFFER_SIZE bytes are free,
+  # first growing the allocated buffer if it is smaller. Afterwards there is
+  # room for at least 5 bytes, so the writes below advance `@pos` with `&+`:
+  # it stays below `@capacity`.
   @[AlwaysInline]
   private def flush_if_needed : Nil
-    flush unless @pos + 5 < OUTPUT_BUFFER_SIZE
+    return if @pos < @write_limit
+    grow_buffer
+    flush unless @pos < @write_limit
+  end
+
+  # Grows the buffer to OUTPUT_BUFFER_SIZE (see INITIAL_BUFFER_SIZE).
+  private def grow_buffer : Nil
+    return if @capacity == OUTPUT_BUFFER_SIZE
+    @capacity = OUTPUT_BUFFER_SIZE
+    @write_limit = @capacity - 5
+    @buffer = @buffer.realloc(@capacity)
   end
 
   # PUT
   @[AlwaysInline]
   private def put(value : UInt8) : Nil
     flush_if_needed
-    @buffer.to_unsafe[@pos] = value
-    @pos += 1
+    @buffer[@pos] = value
+    @pos &+= 1
     @column += 1
   end
 
@@ -872,23 +1017,25 @@ class YAML::Emitter
   @[AlwaysInline]
   private def put_break : Nil
     flush_if_needed
-    @buffer.to_unsafe[@pos] = '\n'.ord.to_u8
-    @pos += 1
+    @buffer[@pos] = '\n'.ord.to_u8
+    @pos &+= 1
     @column = 0
   end
 
-  # COPY: copies one UTF-8 character from p+i, returns the new index.
+  # COPY: copies one UTF-8 character from p+i, returns the new index. The
+  # character (at most 4 bytes, in the value: the Builder rejects malformed
+  # UTF-8) fits after a FLUSH.
   @[AlwaysInline]
   private def copy(p : Pointer(UInt8), i : Int32) : Int32
     w = Chars.width(p, i)
-    buf = @buffer.to_unsafe + @pos
+    buf = @buffer + @pos
     k = 0
     while k < w
-      buf[k] = p[i + k]
-      k += 1
+      buf[k] = p[i &+ k]
+      k &+= 1
     end
-    @pos += w
-    i + w
+    @pos &+= w
+    i &+ w
   end
 
   # WRITE
@@ -900,30 +1047,30 @@ class YAML::Emitter
     i
   end
 
-  # Number of characters at p+i (before *length*) that are ASCII, satisfy
-  # the block, and can be written one byte each before `FLUSH` would flush
-  # the buffer. Loops that WRITE character by character use it to copy such
-  # a run at once, so the buffer is still flushed at the same characters.
+  # WRITE repeated over the characters at p+i (before *length*) that are
+  # ASCII, satisfy the block, and can be written one byte each before
+  # `FLUSH` would flush or grow the buffer; returns the new index. Loops
+  # that WRITE character by character use it to copy such a run at once, so
+  # the buffer is still flushed at the same characters. Each byte is stored
+  # as it is checked: short runs are the common case, and a call to memcpy
+  # per run would cost more than the copy.
   @[AlwaysInline]
-  private def ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
-    limit = Math.min(length - i, OUTPUT_BUFFER_SIZE - 5 - @pos)
+  private def write_ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
+    # `n < limit` keeps p[i + n] inside the value and dst[n] inside the
+    # buffer, so `n`, `i + n` and `@pos + n` can't overflow.
+    limit = Math.min(length - i, @write_limit - @pos)
+    src = p + i
+    dst = @buffer + @pos
     n = 0
     while n < limit
-      b = p[i + n]
+      b = src[n]
       break unless b < 0x80 && yield b
-      n += 1
+      dst[n] = b
+      n &+= 1
     end
-    n
-  end
-
-  # WRITE repeated over *count* ASCII characters (see `#ascii_run`).
-  @[AlwaysInline]
-  private def write_ascii(p : Pointer(UInt8), i : Int32, count : Int32) : Int32
-    return i if count == 0
-    (@buffer.to_unsafe + @pos).copy_from(p + i, count)
-    @pos += count
-    @column += count
-    i + count
+    @pos &+= n
+    @column += n
+    i &+ n
   end
 
   # WRITE_BREAK
@@ -947,10 +1094,21 @@ class YAML::Emitter
       put_break
     end
     while @column < indent
-      # Fast path: PUT repeated over the spaces that fit before a flush.
-      n = Math.min(indent - @column, OUTPUT_BUFFER_SIZE - 5 - @pos)
+      # Fast path: PUT repeated over the spaces that fit before a flush (or
+      # growing the buffer).
+      n = Math.min(indent - @column, @write_limit - @pos)
       if n > 0
-        (@buffer.to_unsafe + @pos).fill(n, ' '.ord.to_u8)
+        buf = @buffer + @pos
+        if n <= 16 && @pos <= @capacity - 16
+          # Indents are short: store 16 spaces (inside the buffer) instead
+          # of calling memset. Those past `n` are past the end of the output,
+          # which overwrites them.
+          spaces = 0x2020202020202020_u64
+          buf.copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+          (buf + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+        else
+          buf.fill(n, ' '.ord.to_u8)
+        end
         @pos += n
         @column += n
         next
@@ -961,7 +1119,8 @@ class YAML::Emitter
     @indention = true
   end
 
-  # yaml_emitter_write_indicator
+  # yaml_emitter_write_indicator (inlined: indicators are short constants)
+  @[AlwaysInline]
   private def write_indicator(indicator : String, need_whitespace : Bool, is_whitespace : Bool, is_indention : Bool) : Nil
     put(' '.ord.to_u8) if need_whitespace && !@whitespace
     p = indicator.to_unsafe
@@ -1059,7 +1218,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
+        i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord }
         @indention = false
         spaces = false
         breaks = false
@@ -1099,7 +1258,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch without a quote to double.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord && b != '\''.ord })
+        i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord && b != '\''.ord }
         @indention = false
         spaces = false
         breaks = false
@@ -1183,7 +1342,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch (printable ASCII, no space, quote or escape).
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b > 0x20 && b < 0x7F && b != '"'.ord && b != '\\'.ord })
+        i = write_ascii_run(p, i, length) { |b| b > 0x20 && b < 0x7F && b != '"'.ord && b != '\\'.ord }
         spaces = false
       end
     end
@@ -1251,7 +1410,7 @@ class YAML::Emitter
         write_indent if breaks
         i = write(p, i)
         # Fast path: WRITE repeated over the rest of the line.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != '\r'.ord && b != '\n'.ord })
+        i = write_ascii_run(p, i, length) { |b| b != '\r'.ord && b != '\n'.ord }
         @indention = false
         breaks = false
       end
@@ -1294,7 +1453,7 @@ class YAML::Emitter
           i = write(p, i)
           # Fast path: WRITE repeated over the following characters that
           # would also take this branch.
-          i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
+          i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord }
         end
         @indention = false
         breaks = false
