@@ -33,7 +33,10 @@ errors() { # label, log
   case "$summary" in
   *"ERROR SUMMARY: 0 errors"*) ;;
   *)
-    echo "$1: unsuppressed valgrind errors, see $2" >&2
+    echo "$1: unsuppressed valgrind errors (full log: $2):" >&2
+    # Only unsuppressed errors are written out; show their stacks.
+    sed -n '/^==[0-9]*== \(Invalid\|Conditional\|Use of\|Source and\|Mismatched\|Syscall\|Argument\|Process terminating\)/,/^==[0-9]*== $/p' "$2" |
+      head -n 120 >&2
     failed=1
     ;;
   esac

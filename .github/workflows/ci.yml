@@ -313,7 +313,10 @@ jobs:
           export CRYSTAL_PATH="lib/cryaml/shim:$(crystal env CRYSTAL_PATH)"
           # libyaml is installed on the runner, so if the shim weren't picked
           # up the specs would silently test the stdlib: check the binary.
-          crystal build $(find $SPECS -name '*_spec.cr' | sort) -o /tmp/specs
+          # Like `crystal spec`, require each file from one entry point (on
+          # the command line, several files share one scope for `private`).
+          find $SPECS -name '*_spec.cr' | sort | sed 's|.*|require "./&"|' > /tmp/project/all_specs.cr
+          crystal build all_specs.cr -o /tmp/specs
           if ldd /tmp/specs | grep -i yaml; then
             echo "specs linked libyaml: the shim wasn't used" >&2
             exit 1
