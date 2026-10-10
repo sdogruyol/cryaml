@@ -37,6 +37,15 @@ class YAML::Scanner < YAML::Reader
   # nothing to do.
   @stale_key_line = Int64::MAX
   @stale_key_index = Int64::MAX
+  # The token number of the possible simple key of the lowest flow level
+  # (`Int64::MAX` when there is none). A key is saved at the innermost
+  # level, after the keys of the levels around it, so the token numbers of
+  # possible keys increase with their level and this is the smallest; and
+  # the parser never gets past a possible key's token, so none is smaller
+  # than `@tokens_parsed`. A possible key is therefore the next token
+  # exactly when this is `@tokens_parsed`: libyaml's search of the stack in
+  # `yaml_parser_fetch_more_tokens` is one comparison.
+  @first_key_token = Int64::MAX
   @flow_level = 0
   @scanner_error : ParseException? = nil
 
@@ -94,14 +103,7 @@ class YAML::Scanner < YAML::Reader
   # needed to decide whether a KEY goes before it.
   @[AlwaysInline]
   private def simple_key_pending? : Bool
-    i = @possible_floor
-    size = @simple_keys.size
-    while i < size
-      simple_key = @simple_keys.unsafe_fetch(i)
-      return true if simple_key.possible && simple_key.token_number == @tokens_parsed
-      i += 1
-    end
-    false
+    @first_key_token == @tokens_parsed
   end
 
   # yaml_parser_fetch_more_tokens
@@ -194,6 +196,7 @@ class YAML::Scanner < YAML::Reader
   private def remove_stale_simple_keys : Nil
     stale_key_line = Int64::MAX
     stale_key_index = Int64::MAX
+    first_key_token = Int64::MAX
     i = @possible_floor
     size = @simple_keys.size
     while i < size
@@ -208,12 +211,14 @@ class YAML::Scanner < YAML::Reader
         else
           stale_key_line = Math.min(stale_key_line, simple_key.mark.line)
           stale_key_index = Math.min(stale_key_index, simple_key.mark.index &+ 1024)
+          first_key_token = Math.min(first_key_token, simple_key.token_number)
         end
       end
       i += 1
     end
     @stale_key_line = stale_key_line
     @stale_key_index = stale_key_index
+    @first_key_token = first_key_token
     while @possible_floor < size && !@simple_keys.unsafe_fetch(@possible_floor).possible
       @possible_floor += 1
     end
@@ -238,6 +243,8 @@ class YAML::Scanner < YAML::Reader
       @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
       @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index &+ 1024)
+      # Any other possible key has a smaller token number.
+      @first_key_token = Math.min(@first_key_token, simple_key.token_number)
     end
   end
 
@@ -245,11 +252,22 @@ class YAML::Scanner < YAML::Reader
   private def remove_simple_key : Nil
     pointer = current_simple_key
     simple_key = pointer.value
-    if simple_key.possible && simple_key.required
-      scanner_error("while scanning a simple key", simple_key.mark,
-        "could not find expected ':'")
+    if simple_key.possible
+      if simple_key.required
+        scanner_error("while scanning a simple key", simple_key.mark,
+          "could not find expected ':'")
+      end
+      forget_first_key(simple_key)
     end
     pointer.value = simple_key.copy_with(possible: false)
+  end
+
+  # Keeps `@first_key_token` up to date when the possible key of the current
+  # flow level stops being possible: if it was the first one, no level below
+  # has a possible key either.
+  @[AlwaysInline]
+  private def forget_first_key(simple_key : SimpleKey) : Nil
+    @first_key_token = Int64::MAX if simple_key.token_number == @first_key_token
   end
 
   # yaml_parser_increase_flow_level
@@ -405,6 +423,7 @@ class YAML::Scanner < YAML::Reader
       roll_indent(simple_key.mark.column, simple_key.token_number,
         TokenKind::BLOCK_MAPPING_START, simple_key.mark)
       pointer.value = simple_key.copy_with(possible: false)
+      forget_first_key(simple_key)
       @simple_key_allowed = false
     else
       if @flow_level == 0
