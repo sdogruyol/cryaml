@@ -569,6 +569,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_select_scalar_style
+  @[AlwaysInline]
   private def select_scalar_style(event : Event*) : Nil
     style = event.value.scalar_style
     no_tag = @tag_handle.null? && @tag_suffix.null?
