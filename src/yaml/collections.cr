@@ -71,6 +71,7 @@ class YAML::Queue(T)
   end
 
   # QUEUE_INSERT: inserts *item* *index* positions after the head.
+  @[AlwaysInline]
   def insert(index : Int32, item : T) : self
     raise IndexError.new unless 0 <= index <= size
     extend_queue if @tail == @capacity
