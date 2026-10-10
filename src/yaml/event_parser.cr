@@ -40,20 +40,31 @@ class YAML::EventParser
   @tag_directives = [] of {String, String}
   @error : ParseException? = nil
 
+  # The current event. The parser builds each event right here, where
+  # `PullParser` reads it, rather than returning a 128-byte struct through
+  # every state function.
+  getter event = Event.new
+
   def initialize(input : String | IO)
     @scanner = Scanner.new(input)
   end
 
-  # yaml_parser_parse
-  def parse : Event
+  # yaml_parser_parse: replaces `#event` with the next event. As with
+  # libyaml, a failure leaves an empty (NONE) event behind.
+  def parse : Nil
     if error = @error
+      @event = Event.new
       raise error
     end
-    return Event.new if @scanner.stream_end_produced? || @state.end?
+    if @scanner.stream_end_produced? || @state.end?
+      @event = Event.new
+      return
+    end
     begin
       state_machine
-    rescue ex : ParseException
-      @error = ex
+    rescue ex
+      @event = Event.new
+      @error = ex if ex.is_a?(ParseException)
       raise ex
     end
   end
@@ -74,7 +85,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_state_machine
-  private def state_machine : Event
+  private def state_machine : Nil
     case @state
     in .stream_start?                      then parse_stream_start
     in .implicit_document_start?           then parse_document_start(true)
@@ -99,23 +110,23 @@ class YAML::EventParser
     in .flow_mapping_key?                  then parse_flow_mapping_key(false)
     in .flow_mapping_value?                then parse_flow_mapping_value(false)
     in .flow_mapping_empty_value?          then parse_flow_mapping_value(true)
-    in .end?                               then Event.new
+    in .end?                               then @event = Event.new
     end
   end
 
   # yaml_parser_parse_stream_start
-  private def parse_stream_start : Event
+  private def parse_stream_start : Nil
     token = peek
     unless token.kind.stream_start?
       error("did not find expected <stream-start>", token.start_mark)
     end
     @state = State::IMPLICIT_DOCUMENT_START
     skip
-    Event.new(EventKind::STREAM_START, token.start_mark, token.start_mark)
+    @event = Event.new(EventKind::STREAM_START, token.start_mark, token.start_mark)
   end
 
   # yaml_parser_parse_document_start
-  private def parse_document_start(implicit : Bool) : Event
+  private def parse_document_start(implicit : Bool) : Nil
     token = peek
 
     unless implicit
@@ -131,7 +142,7 @@ class YAML::EventParser
       process_directives
       @states << State::DOCUMENT_END
       @state = State::BLOCK_NODE
-      Event.new(EventKind::DOCUMENT_START, token.start_mark, token.start_mark, implicit: true)
+      @event = Event.new(EventKind::DOCUMENT_START, token.start_mark, token.start_mark, implicit: true)
     elsif !kind.stream_end?
       start_mark = token.start_mark
       version_directive, tag_directives = process_directives
@@ -143,17 +154,17 @@ class YAML::EventParser
       @state = State::DOCUMENT_CONTENT
       end_mark = token.end_mark
       skip
-      Event.new(EventKind::DOCUMENT_START, start_mark, end_mark,
+      @event = Event.new(EventKind::DOCUMENT_START, start_mark, end_mark,
         version_directive: version_directive, tag_directives: tag_directives, implicit: false)
     else
       @state = State::END
       skip
-      Event.new(EventKind::STREAM_END, token.start_mark, token.end_mark)
+      @event = Event.new(EventKind::STREAM_END, token.start_mark, token.end_mark)
     end
   end
 
   # yaml_parser_parse_document_content
-  private def parse_document_content : Event
+  private def parse_document_content : Nil
     token = peek
     kind = token.kind
     if kind.version_directive? || kind.tag_directive? || kind.document_start? ||
@@ -166,7 +177,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_document_end
-  private def parse_document_end : Event
+  private def parse_document_end : Nil
     token = peek
     start_mark = end_mark = token.start_mark
     implicit = true
@@ -177,17 +188,18 @@ class YAML::EventParser
     end
     @tag_directives.clear
     @state = State::DOCUMENT_START
-    Event.new(EventKind::DOCUMENT_END, start_mark, end_mark, implicit: implicit)
+    @event = Event.new(EventKind::DOCUMENT_END, start_mark, end_mark, implicit: implicit)
   end
 
   # yaml_parser_parse_node
-  private def parse_node(block : Bool, indentless_sequence : Bool) : Event
+  private def parse_node(block : Bool, indentless_sequence : Bool) : Nil
     token = peek
 
     if token.kind.alias?
       @state = @states.pop
       skip
-      return Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
+      @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
+      return
     end
 
     anchor = nil
@@ -245,8 +257,9 @@ class YAML::EventParser
     if indentless_sequence && token.kind.block_entry?
       end_mark = token.end_mark
       @state = State::INDENTLESS_SEQUENCE_ENTRY
-      return Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
+      @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
         anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::BLOCK)
+      return
     end
 
     case token.kind
@@ -261,34 +274,34 @@ class YAML::EventParser
       end
       @state = @states.pop
       skip
-      Event.new(EventKind::SCALAR, start_mark, end_mark,
+      @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
         anchor: anchor, tag: tag, value: token.value,
         plain_implicit: plain_implicit, quoted_implicit: quoted_implicit,
         scalar_style: token.style)
     when .flow_sequence_start?
       end_mark = token.end_mark
       @state = State::FLOW_SEQUENCE_FIRST_ENTRY
-      Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
+      @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
         anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::FLOW)
     when .flow_mapping_start?
       end_mark = token.end_mark
       @state = State::FLOW_MAPPING_FIRST_KEY
-      Event.new(EventKind::MAPPING_START, start_mark, end_mark,
+      @event = Event.new(EventKind::MAPPING_START, start_mark, end_mark,
         anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::FLOW)
     else
       if block && token.kind.block_sequence_start?
         end_mark = token.end_mark
         @state = State::BLOCK_SEQUENCE_FIRST_ENTRY
-        Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
+        @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
           anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::BLOCK)
       elsif block && token.kind.block_mapping_start?
         end_mark = token.end_mark
         @state = State::BLOCK_MAPPING_FIRST_KEY
-        Event.new(EventKind::MAPPING_START, start_mark, end_mark,
+        @event = Event.new(EventKind::MAPPING_START, start_mark, end_mark,
           anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::BLOCK)
       elsif anchor || tag
         @state = @states.pop
-        Event.new(EventKind::SCALAR, start_mark, end_mark,
+        @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
           anchor: anchor, tag: tag, value: "",
           plain_implicit: implicit, quoted_implicit: false,
           scalar_style: ScalarStyle::PLAIN)
@@ -300,7 +313,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_block_sequence_entry
-  private def parse_block_sequence_entry(first : Bool) : Event
+  private def parse_block_sequence_entry(first : Bool) : Nil
     if first
       token = peek
       @marks << token.start_mark
@@ -323,7 +336,7 @@ class YAML::EventParser
       @state = @states.pop
       @marks.pop
       skip
-      Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
+      @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
     else
       error("did not find expected '-' indicator", token.start_mark,
         "while parsing a block collection", @marks.pop)
@@ -331,7 +344,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_indentless_sequence_entry
-  private def parse_indentless_sequence_entry : Event
+  private def parse_indentless_sequence_entry : Nil
     token = peek
     if token.kind.block_entry?
       mark = token.end_mark
@@ -347,12 +360,12 @@ class YAML::EventParser
       end
     else
       @state = @states.pop
-      Event.new(EventKind::SEQUENCE_END, token.start_mark, token.start_mark)
+      @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.start_mark)
     end
   end
 
   # yaml_parser_parse_block_mapping_key
-  private def parse_block_mapping_key(first : Bool) : Event
+  private def parse_block_mapping_key(first : Bool) : Nil
     if first
       token = peek
       @marks << token.start_mark
@@ -376,7 +389,7 @@ class YAML::EventParser
       @state = @states.pop
       @marks.pop
       skip
-      Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
+      @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
     else
       error("did not find expected key", token.start_mark,
         "while parsing a block mapping", @marks.pop)
@@ -384,7 +397,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_block_mapping_value
-  private def parse_block_mapping_value : Event
+  private def parse_block_mapping_value : Nil
     token = peek
     if token.kind.value?
       mark = token.end_mark
@@ -405,7 +418,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_flow_sequence_entry
-  private def parse_flow_sequence_entry(first : Bool) : Event
+  private def parse_flow_sequence_entry(first : Bool) : Nil
     if first
       token = peek
       @marks << token.start_mark
@@ -427,8 +440,9 @@ class YAML::EventParser
       if token.kind.key?
         @state = State::FLOW_SEQUENCE_ENTRY_MAPPING_KEY
         skip
-        return Event.new(EventKind::MAPPING_START, token.start_mark, token.end_mark,
+        @event = Event.new(EventKind::MAPPING_START, token.start_mark, token.end_mark,
           implicit: true, mapping_style: MappingStyle::FLOW)
+        return
       elsif !token.kind.flow_sequence_end?
         @states << State::FLOW_SEQUENCE_ENTRY
         return parse_node(false, false)
@@ -438,11 +452,11 @@ class YAML::EventParser
     @state = @states.pop
     @marks.pop
     skip
-    Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
+    @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_key
-  private def parse_flow_sequence_entry_mapping_key : Event
+  private def parse_flow_sequence_entry_mapping_key : Nil
     token = peek
     kind = token.kind
     if !kind.value? && !kind.flow_entry? && !kind.flow_sequence_end?
@@ -457,7 +471,7 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_value
-  private def parse_flow_sequence_entry_mapping_value : Event
+  private def parse_flow_sequence_entry_mapping_value : Nil
     token = peek
     if token.kind.value?
       skip
@@ -472,14 +486,14 @@ class YAML::EventParser
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_end
-  private def parse_flow_sequence_entry_mapping_end : Event
+  private def parse_flow_sequence_entry_mapping_end : Nil
     token = peek
     @state = State::FLOW_SEQUENCE_ENTRY
-    Event.new(EventKind::MAPPING_END, token.start_mark, token.start_mark)
+    @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.start_mark)
   end
 
   # yaml_parser_parse_flow_mapping_key
-  private def parse_flow_mapping_key(first : Bool) : Event
+  private def parse_flow_mapping_key(first : Bool) : Nil
     if first
       token = peek
       @marks << token.start_mark
@@ -518,11 +532,11 @@ class YAML::EventParser
     @state = @states.pop
     @marks.pop
     skip
-    Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
+    @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
   end
 
   # yaml_parser_parse_flow_mapping_value
-  private def parse_flow_mapping_value(empty : Bool) : Event
+  private def parse_flow_mapping_value(empty : Bool) : Nil
     token = peek
     if empty
       @state = State::FLOW_MAPPING_KEY
@@ -542,8 +556,8 @@ class YAML::EventParser
   end
 
   # yaml_parser_process_empty_scalar
-  private def process_empty_scalar(mark : Mark) : Event
-    Event.new(EventKind::SCALAR, mark, mark, value: "",
+  private def process_empty_scalar(mark : Mark) : Nil
+    @event = Event.new(EventKind::SCALAR, mark, mark, value: "",
       plain_implicit: true, quoted_implicit: false, scalar_style: ScalarStyle::PLAIN)
   end
 

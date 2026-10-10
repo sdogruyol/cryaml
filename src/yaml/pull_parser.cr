@@ -39,7 +39,6 @@ class YAML::PullParser
 
   def initialize(@content : String | IO)
     @parser = EventParser.new(content)
-    @event = Event.new
 
     @nesting = 0
     @anchors = 0
@@ -60,7 +59,7 @@ class YAML::PullParser
 
   # The current event kind.
   def kind : EventKind
-    @event.kind
+    @parser.event.kind
   end
 
   # Returns the tag associated to the current event, or `nil`
@@ -68,7 +67,7 @@ class YAML::PullParser
   def tag : String?
     case kind
     when .mapping_start?, .sequence_start?, .scalar?
-      @event.tag
+      @parser.event.tag
     else
       # no tag
     end
@@ -79,7 +78,7 @@ class YAML::PullParser
   def value : String
     expect_kind EventKind::SCALAR
 
-    @event.value
+    @parser.event.value
   end
 
   # Returns the anchor associated to the current event, or `nil`
@@ -90,32 +89,28 @@ class YAML::PullParser
   # at a sequence begin event. Raises otherwise.
   def sequence_style : SequenceStyle
     expect_kind EventKind::SEQUENCE_START
-    @event.sequence_style
+    @parser.event.sequence_style
   end
 
   # Returns the mapping style, assuming the pull parser is located
   # at a mapping begin event. Raises otherwise.
   def mapping_style : MappingStyle
     expect_kind EventKind::MAPPING_START
-    @event.mapping_style
+    @parser.event.mapping_style
   end
 
   # Returns the scalar style, assuming the pull parser is located
   # at a scalar event. Raises otherwise.
   def scalar_style : ScalarStyle
     expect_kind EventKind::SCALAR
-    @event.scalar_style
+    @parser.event.scalar_style
   end
 
   # Reads the next event.
   def read_next : EventKind
-    # As with libyaml, a failed read leaves an empty (NONE) event behind.
-    @event = begin
-      @parser.parse
-    rescue ex
-      @event = Event.new
-      raise ex
-    end
+    # As with libyaml, a failed read leaves an empty (NONE) event behind
+    # (`EventParser#parse` sees to that).
+    @parser.parse
 
     read_anchor
     @anchors += 1 if @anchor
@@ -273,19 +268,19 @@ class YAML::PullParser
   end
 
   def start_line : Int32
-    @event.start_mark.line.to_i32 + 1
+    @parser.event.start_mark.line.to_i32 + 1
   end
 
   def start_column : Int32
-    @event.start_mark.column.to_i32 + 1
+    @parser.event.start_mark.column.to_i32 + 1
   end
 
   def end_line : Int32
-    @event.end_mark.line.to_i32 + 1
+    @parser.event.end_mark.line.to_i32 + 1
   end
 
   def end_column : Int32
-    @event.end_mark.column.to_i32 + 1
+    @parser.event.end_mark.column.to_i32 + 1
   end
 
   # Closes the parser. Nothing native is held, so there is nothing to free.
@@ -301,7 +296,7 @@ class YAML::PullParser
     @anchor =
       case kind
       when .scalar?, .sequence_start?, .mapping_start?, .alias?
-        @event.anchor
+        @parser.event.anchor
       end
   end
 
