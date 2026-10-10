@@ -977,6 +977,46 @@ class YAML::Scanner < YAML::Reader
     {indent, end_mark}
   end
 
+  # The run of characters at the current position that a quoted scalar takes
+  # as they are: no blank or break, no quote, no escape in double quotes.
+  # `#ascii_run(2)` with that condition, eight bytes at a time (the flags
+  # work as in `#block_plain_run`).
+  @[AlwaysInline]
+  private def quoted_run(single : Bool) : Int32
+    p = pointer
+    limit = @unread &- 2
+    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
+    quotes = single ? 0x2727272727272727_u64 : 0x2222222222222222_u64
+    # The scanner comes back for a run right after the character that ended
+    # the last one, so the first byte alone often settles it.
+    return 0 unless 0 < limit && quoted_run_char?(p[0], quote, single)
+    n = 1
+    while n &+ 8 <= limit
+      word = uninitialized UInt64
+      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
+      quoted = word ^ quotes
+      stop = word |
+             ((word &- 0x2121212121212121_u64) & ~word) |
+             ((quoted &- 0x0101010101010101_u64) & ~quoted)
+      unless single
+        escaped = word ^ 0x5C5C5C5C5C5C5C5C_u64
+        stop |= (escaped &- 0x0101010101010101_u64) & ~escaped
+      end
+      stop &= 0x8080808080808080_u64
+      return n &+ zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit && quoted_run_char?(p[n], quote, single)
+      n &+= 1
+    end
+    n
+  end
+
+  @[AlwaysInline]
+  private def quoted_run_char?(b : UInt8, quote : UInt8, single : Bool) : Bool
+    b > 0x20 && b < 0x80 && b != quote && (single || b != '\\'.ord)
+  end
+
   # yaml_parser_scan_flow_scalar
   private def scan_flow_scalar(single : Bool) : Token
     string = @string
@@ -1015,7 +1055,7 @@ class YAML::Scanner < YAML::Reader
       until blankz?
         # Fast path: a run of characters that are neither quotes nor escapes
         # is `READ` + `CACHE(2)` repeated.
-        n = ascii_run(2) { |b| b > 0x20 && b != quote && (single || b != '\\'.ord) }
+        n = quoted_run(single)
         if n > 0
           read_ascii(string, n)
           next
