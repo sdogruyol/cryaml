@@ -3,8 +3,8 @@
 # The scanner's token queue and the emitter's event queue: libyaml's `QUEUE`
 # macros. The queued items are `@buffer[@head...@tail]`, and
 # `yaml_queue_extend` makes room at the tail by moving them to the front or
-# by doubling the buffer. Dequeued slots are not cleared (neither are they in
-# libyaml); they are overwritten as the queue is refilled.
+# by doubling the buffer. Dequeued slots are cleared, so their strings can be
+# collected (libyaml frees each dequeued token and event).
 class YAML::Queue(T)
   INITIAL_CAPACITY = 4
 
@@ -52,6 +52,7 @@ class YAML::Queue(T)
   def shift : T
     raise IndexError.new if empty?
     item = @buffer[@head]
+    (@buffer + @head).clear
     @head += 1
     if @head == @tail
       @head = 0
@@ -95,6 +96,8 @@ class YAML::Queue(T)
       @capacity = capacity
     else
       @buffer.move_from(@buffer + @head, size)
+      # The vacated tail still holds copies of the moved items.
+      (@buffer + size).clear(@head)
       @tail -= @head
       @head = 0
     end
@@ -105,7 +108,7 @@ end
 #
 # The state, indentation and mark stacks of the scanner, parser and emitter:
 # libyaml's `STACK` macros (`PUSH`, `POP`). Unlike `Array#push` and
-# `Array#pop`, pushing and popping inline at the call site, as in libyaml.
+# `Array#pop`, both are inlined at the call site, as the macros are in libyaml.
 class YAML::Stack(T)
   INITIAL_CAPACITY = 4
 
