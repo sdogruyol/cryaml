@@ -1150,13 +1150,53 @@ class YAML::Scanner < YAML::Reader
       style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
   end
 
-  # Characters that can extend a plain scalar without any of the checks of
-  # `#scan_plain_scalar` (no ':', no flow indicator in a flow collection),
-  # when no whitespace is waiting to be joined.
+  # The run of characters at the current position that can extend a plain
+  # scalar without any of the checks of `#scan_plain_scalar` (no ':', no
+  # flow indicator in a flow collection), for when no whitespace is waiting
+  # to be joined: `#ascii_run(2)` with that condition.
   @[AlwaysInline]
-  private def plain_run_char?(b : UInt8) : Bool
-    b > 0x20 && b != ':'.ord &&
-      (@flow_level == 0 || !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord))
+  private def plain_run : Int32
+    if @flow_level == 0
+      block_plain_run
+    else
+      ascii_run(2) do |b|
+        b > 0x20 && b != ':'.ord &&
+          !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord)
+      end
+    end
+  end
+
+  # `#plain_run` in the block context, eight bytes at a time.
+  @[AlwaysInline]
+  private def block_plain_run : Int32
+    p = pointer
+    limit = @unread &- 2
+    n = 0
+    # Every character takes at least one byte, so while at least eight more
+    # characters are allowed the next eight bytes are decoded.
+    while n &+ 8 <= limit
+      word = uninitialized UInt64
+      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
+      # Sets the high bit of the bytes that end the run: those that have it
+      # set, those below 0x21 (they borrow when 0x21 is subtracted) and ':'
+      # (zero after the XOR, so it borrows when 1 is subtracted). A borrow
+      # only passes on from a byte that is itself flagged, so the first
+      # flagged byte in memory order is the first that ends the run; on
+      # big-endian targets a borrow can also flag earlier bytes, which only
+      # cuts the run short (see `Reader#printable_ascii_prefix`).
+      colons = word ^ 0x3A3A3A3A3A3A3A3A_u64
+      stop = (word |
+              ((word &- 0x2121212121212121_u64) & ~word) |
+              ((colons &- 0x0101010101010101_u64) & ~colons)) & 0x8080808080808080_u64
+      return n &+ zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit
+      b = p[n]
+      break unless b > 0x20 && b < 0x80 && b != ':'.ord
+      n &+= 1
+    end
+    n
   end
 
   # yaml_parser_scan_plain_scalar
@@ -1178,9 +1218,9 @@ class YAML::Scanner < YAML::Reader
     # do; otherwise the loop carries on after the run.
     resume = false
     if verbatim
-      n = ascii_run(2) { |b| plain_run_char?(b) }
+      n = plain_run
       if n > 0
-        # `#ascii_run` leaves the two characters after the run decoded.
+        # `#plain_run` leaves the two characters after the run decoded.
         if check?(':', n) && blankz?(n &+ 1)
           skip_ascii(n)
           return Token.new(TokenKind::SCALAR, start_mark, mark,
@@ -1225,7 +1265,7 @@ class YAML::Scanner < YAML::Reader
         # (no ':' or flow indicator, no pending whitespace to join) is
         # `READ` + `CACHE(2)` repeated.
         if !leading_blanks && whitespaces.empty?
-          n = ascii_run(2) { |b| plain_run_char?(b) }
+          n = plain_run
           if n > 0
             if verbatim
               skip_ascii(n)
