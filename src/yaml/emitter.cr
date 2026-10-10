@@ -1124,25 +1124,41 @@ class YAML::Emitter
   # yaml_emitter_write_indent
   private def write_indent : Nil
     indent = @indent >= 0 ? @indent : 0
-    if !@indention || @column > indent || (@column == indent && !@whitespace)
-      put_break
+    column = @column
+    need_break = !@indention || column > indent || (column == indent && !@whitespace)
+    # Fast path: an indentation of at most 16 columns, and room for the
+    # break and 16 spaces before the next FLUSH, so none of the PUTs
+    # would flush (or grow the buffer). Store the break and 16 spaces;
+    # those past the indentation are past the end of the output, which
+    # overwrites them. (`@write_limit` is at least INITIAL_BUFFER_SIZE - 5.)
+    pos = @pos
+    return write_indent_slow(indent, need_break) unless indent <= 16 && pos <= @write_limit &- 17
+    buffer = @buffer
+    if need_break
+      buffer[pos] = '\n'.ord.to_u8
+      pos &+= 1
+      column = 0
     end
+    spaces = 0x2020202020202020_u64
+    (buffer + pos).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+    (buffer + pos + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+    # Without a break, `column <= indent` (`column > indent` needs one).
+    @pos = pos &+ (indent &- column)
+    @column = indent
+    @whitespace = true
+    @indention = true
+  end
+
+  # The rest of yaml_emitter_write_indent: PUT per character, except that
+  # the spaces that fit before a flush (or growing the buffer) are stored
+  # at once.
+  @[NoInline]
+  private def write_indent_slow(indent : Int32, need_break : Bool) : Nil
+    put_break if need_break
     while @column < indent
-      # Fast path: PUT repeated over the spaces that fit before a flush (or
-      # growing the buffer).
       n = Math.min(indent - @column, @write_limit - @pos)
       if n > 0
-        buf = @buffer + @pos
-        if n <= 16 && @pos <= @capacity - 16
-          # Indents are short: store 16 spaces (inside the buffer) instead
-          # of calling memset. Those past `n` are past the end of the output,
-          # which overwrites them.
-          spaces = 0x2020202020202020_u64
-          buf.copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
-          (buf + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
-        else
-          buf.fill(n, ' '.ord.to_u8)
-        end
+        (@buffer + @pos).fill(n, ' '.ord.to_u8)
         @pos += n
         @column += n
         next
