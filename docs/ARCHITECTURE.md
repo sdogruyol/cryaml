@@ -155,7 +155,10 @@ flowchart LR
   platform; `CRYAML_ORACLE=1` compares with the live oracle instead (CI does
   on Linux and macOS) and checks the recordings are current,
   `CRYAML_ORACLE=update` rewrites them. The oracle refuses any libyaml but
-  0.2.5: Crystal's own macOS build links an older one, which differs.
+  0.2.5 (Crystal's own macOS build links an older one, which differs) and
+  refuses to be cryaml itself (a `CRYSTAL_PATH` with the shim would make it
+  so); it is rebuilt when the compiler, `CRYSTAL_PATH` or libyaml prefix
+  change.
 - **Fuzzing.** `fuzz/fuzz.cr` mutates the corpus and generates `Builder`
   scripts, runs both implementations as separate processes (so crashes and
   hangs on either side are caught) and minimizes every difference. A nightly
