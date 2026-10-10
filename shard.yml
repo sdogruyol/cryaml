@@ -1,5 +1,5 @@
 name: cryaml
-version: 0.1.0
+version: 0.1.1
 description: |
   Pure Crystal YAML: the stdlib YAML API without libyaml.
 
