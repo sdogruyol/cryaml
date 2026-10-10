@@ -506,12 +506,40 @@ class YAML::Emitter
     length = @scalar_length
     return false unless @scalar_style.plain? && @ascii_word && length < @write_limit - @pos
     put(' '.ord.to_u8) unless @whitespace
-    (@buffer + @pos).copy_from(@scalar_value, length)
+    copy_bytes(@buffer + @pos, @scalar_value, length)
     @pos &+= length # below @write_limit
     @column += length
     @whitespace = false
     @indention = false
     true
+  end
+
+  # Copies *count* bytes from *src* to *dst*. Scalars are mostly short
+  # words: up to 16 bytes are copied with two overlapping loads and stores
+  # (of 8 or 4 bytes, or single bytes), which stay inside both ranges and
+  # cost less than a call to memcpy.
+  @[AlwaysInline]
+  private def copy_bytes(dst : Pointer(UInt8), src : Pointer(UInt8), count : Int32) : Nil
+    if count >= 8
+      return dst.copy_from(src, count) if count > 16
+      head = Chars.load_word(src)
+      tail = Chars.load_word(src + (count &- 8))
+      dst.copy_from(pointerof(head).as(Pointer(UInt8)), 8)
+      (dst + (count &- 8)).copy_from(pointerof(tail).as(Pointer(UInt8)), 8)
+    elsif count >= 4
+      head32 = uninitialized UInt32
+      tail32 = uninitialized UInt32
+      pointerof(head32).as(Pointer(UInt8)).copy_from(src, 4)
+      pointerof(tail32).as(Pointer(UInt8)).copy_from(src + (count &- 4), 4)
+      dst.copy_from(pointerof(head32).as(Pointer(UInt8)), 4)
+      (dst + (count &- 4)).copy_from(pointerof(tail32).as(Pointer(UInt8)), 4)
+    elsif count > 0
+      # 1 to 3 bytes: the first, middle and last cover them.
+      half = count >> 1
+      dst[0] = src[0]
+      dst[half] = src[half]
+      dst[count &- 1] = src[count &- 1]
+    end
   end
 
   # yaml_emitter_emit_sequence_start
