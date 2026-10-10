@@ -95,6 +95,22 @@ class YAML::Queue(T)
     self
   end
 
+  # The free slot at the tail, for an item to be built in place and then
+  # enqueued by `#push_tail_slot`: valid until the queue is next modified.
+  @[AlwaysInline]
+  def tail_slot : Pointer(T)
+    extend_queue if @tail == @capacity
+    @buffer + @tail
+  end
+
+  # ENQUEUE of the item built at `#tail_slot`.
+  @[AlwaysInline]
+  def push_tail_slot : self
+    raise IndexError.new if @tail == @capacity
+    @tail &+= 1
+    self
+  end
+
   # QUEUE_INSERT: inserts *item* *index* positions after the head.
   @[AlwaysInline]
   def insert(index : Int32, item : T) : self

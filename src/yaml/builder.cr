@@ -193,8 +193,8 @@ class YAML::Builder
     end
   end
 
-  # Inlined, so *event* is the caller's local and the emitter reads it in
-  # place instead of from a copy.
+  # Inlined, so *event* is the caller's local, which LLVM breaks up into
+  # stores to the emitter's event slot (see `Emitter#event_slot`).
   @[AlwaysInline]
   private def emit(event_name : String, event : Event) : Nil
     # libyaml's event constructors reject malformed UTF-8 (`yaml_check_utf8`).
@@ -204,7 +204,9 @@ class YAML::Builder
       raise YAML::Error.new("Error emitting #{event_name}: invalid UTF-8 string")
     end
 
-    unless @emitter.emit(pointerof(event))
+    slot = @emitter.event_slot(event.kind)
+    slot.value = event
+    unless @emitter.emit(slot)
       raise YAML::Error.new("Error emitting #{event_name}: #{@emitter.problem}")
     end
   end

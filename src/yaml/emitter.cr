@@ -92,6 +92,10 @@ class YAML::Emitter
   # (see `#simple_scalar`), which `#write_plain_word?` copies at once.
   @ascii_word = false
 
+  # The event being emitted when it isn't queued, built here by the caller
+  # (see `#event_slot`).
+  @event = Event.new
+
   def initialize(@io : IO)
     # `@buffer[0, @capacity]` is allocated; `@buffer[0, @pos]` is pending
     # output. FLUSH (or growing) is due once `@pos` reaches `@write_limit`,
@@ -102,15 +106,24 @@ class YAML::Emitter
     @pos = 0
   end
 
-  # yaml_emitter_emit. *event* is only read during the call; the queue keeps
-  # a copy. Like libyaml, the functions below take a pointer to the event
-  # (`yaml_event_t *`): *event* itself, or the head of the queue.
+  # Where the caller builds the next event, of *kind*, before passing it to
+  # `#emit`: the tail of the queue if `#emit` will queue it, else `@event`.
+  # libyaml's ENQUEUE copies the caller's event into the queue; building it
+  # in place saves copying the 128-byte struct.
+  @[AlwaysInline]
+  def event_slot(kind : EventKind) : Event*
+    if processed_at_once?(kind)
+      pointerof(@event)
+    else
+      @events.tail_slot
+    end
+  end
+
+  # yaml_emitter_emit, for an event built at `#event_slot`. Like libyaml,
+  # the functions below take a pointer to the event (`yaml_event_t *`):
+  # `@event`, or the head of the queue.
   def emit(event : Event*) : Bool
-    # Fast path: with nothing queued, an event that needs no lookahead (all
-    # but DOCUMENT-START, SEQUENCE-START and MAPPING-START) would be queued
-    # and then processed and dequeued at once by the loop below; skip the
-    # queue.
-    if @events.empty? && !lookahead?(event.value.kind)
+    if processed_at_once?(event.value.kind)
       begin
         analyze_event(event)
         state_machine(event)
@@ -124,7 +137,7 @@ class YAML::Emitter
       return true
     end
 
-    @events << event.value
+    @events.push_tail_slot
     until need_more_events?
       # The state machine reads the queue but doesn't modify it.
       head = @events.first_pointer
@@ -135,6 +148,15 @@ class YAML::Emitter
     true
   rescue Failure
     false
+  end
+
+  # Fast path of `#emit`: with nothing queued, an event that needs no
+  # lookahead (all but DOCUMENT-START, SEQUENCE-START and MAPPING-START)
+  # would be queued and then processed and dequeued at once by its loop;
+  # skip the queue.
+  @[AlwaysInline]
+  private def processed_at_once?(kind : EventKind) : Bool
+    @events.empty? && !lookahead?(kind)
   end
 
   # Whether `need_more_events?` may wait for more events after *kind*.
