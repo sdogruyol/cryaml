@@ -927,30 +927,30 @@ class YAML::Emitter
     i
   end
 
-  # Number of characters at p+i (before *length*) that are ASCII, satisfy
-  # the block, and can be written one byte each before `FLUSH` would flush
-  # the buffer. Loops that WRITE character by character use it to copy such
-  # a run at once, so the buffer is still flushed at the same characters.
+  # WRITE repeated over the characters at p+i (before *length*) that are
+  # ASCII, satisfy the block, and can be written one byte each before
+  # `FLUSH` would flush the buffer; returns the new index. Loops that WRITE
+  # character by character use it to copy such a run at once, so the buffer
+  # is still flushed at the same characters. Each byte is stored as it is
+  # checked: short runs are the common case, and a call to memcpy per run
+  # would cost more than the copy.
   @[AlwaysInline]
-  private def ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
+  private def write_ascii_run(p : Pointer(UInt8), i : Int32, length : Int32, &) : Int32
+    # `n < limit` keeps p[i + n] inside the value and dst[n] inside the
+    # buffer, so `n`, `i + n` and `@pos + n` can't overflow.
     limit = Math.min(length - i, OUTPUT_BUFFER_SIZE - 5 - @pos)
+    src = p + i
+    dst = @buffer.to_unsafe + @pos
     n = 0
     while n < limit
-      b = p[i + n]
+      b = src[n]
       break unless b < 0x80 && yield b
-      n += 1
+      dst[n] = b
+      n &+= 1
     end
-    n
-  end
-
-  # WRITE repeated over *count* ASCII characters (see `#ascii_run`).
-  @[AlwaysInline]
-  private def write_ascii(p : Pointer(UInt8), i : Int32, count : Int32) : Int32
-    return i if count == 0
-    (@buffer.to_unsafe + @pos).copy_from(p + i, count)
-    @pos += count
-    @column += count
-    i + count
+    @pos &+= n
+    @column += n
+    i &+ n
   end
 
   # WRITE_BREAK
@@ -1086,7 +1086,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
+        i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord }
         @indention = false
         spaces = false
         breaks = false
@@ -1126,7 +1126,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch without a quote to double.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord && b != '\''.ord })
+        i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord && b != '\''.ord }
         @indention = false
         spaces = false
         breaks = false
@@ -1210,7 +1210,7 @@ class YAML::Emitter
         i = write(p, i)
         # Fast path: WRITE repeated over the following characters that would
         # also take this branch (printable ASCII, no space, quote or escape).
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b > 0x20 && b < 0x7F && b != '"'.ord && b != '\\'.ord })
+        i = write_ascii_run(p, i, length) { |b| b > 0x20 && b < 0x7F && b != '"'.ord && b != '\\'.ord }
         spaces = false
       end
     end
@@ -1278,7 +1278,7 @@ class YAML::Emitter
         write_indent if breaks
         i = write(p, i)
         # Fast path: WRITE repeated over the rest of the line.
-        i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != '\r'.ord && b != '\n'.ord })
+        i = write_ascii_run(p, i, length) { |b| b != '\r'.ord && b != '\n'.ord }
         @indention = false
         breaks = false
       end
@@ -1321,7 +1321,7 @@ class YAML::Emitter
           i = write(p, i)
           # Fast path: WRITE repeated over the following characters that
           # would also take this branch.
-          i = write_ascii(p, i, ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord })
+          i = write_ascii_run(p, i, length) { |b| b != ' '.ord && b != '\r'.ord && b != '\n'.ord }
         end
         @indention = false
         breaks = false
