@@ -1058,9 +1058,19 @@ class YAML::Emitter
     i &+ w
   end
 
-  # WRITE
+  # WRITE. Inlined for an ASCII character, which is one PUT; longer ones are
+  # copied out of line (`#write_multibyte`).
   @[AlwaysInline]
   private def write(p : Pointer(UInt8), i : Int32) : Int32
+    c = p[i]
+    return write_multibyte(p, i) unless c < 0x80
+    put(c)
+    i &+ 1
+  end
+
+  # WRITE of a character that isn't ASCII.
+  @[NoInline]
+  private def write_multibyte(p : Pointer(UInt8), i : Int32) : Int32
     flush_if_needed
     i = copy(p, i)
     @column += 1
