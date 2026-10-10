@@ -612,18 +612,30 @@ class YAML::Emitter
     @scalar_style = style
   end
 
-  # yaml_emitter_process_anchor (inlined: there usually is none)
+  # yaml_emitter_process_anchor. Only the check is inlined (there usually is
+  # no anchor); the rest would otherwise be copied into every caller.
   @[AlwaysInline]
   private def process_anchor : Nil
-    return if @anchor.null?
+    write_anchor_property unless @anchor.null?
+  end
+
+  # The rest of yaml_emitter_process_anchor.
+  @[NoInline]
+  private def write_anchor_property : Nil
     write_indicator(@anchor_alias ? "*" : "&", true, false, false)
     write_anchor(@anchor, @anchor_length)
   end
 
-  # yaml_emitter_process_tag (inlined: there usually is none)
+  # yaml_emitter_process_tag. Only the check is inlined (there usually is
+  # no tag); the rest would otherwise be copied into every caller.
   @[AlwaysInline]
   private def process_tag : Nil
-    return if @tag_handle.null? && @tag_suffix.null?
+    write_tag_property unless @tag_handle.null? && @tag_suffix.null?
+  end
+
+  # The rest of yaml_emitter_process_tag.
+  @[NoInline]
+  private def write_tag_property : Nil
     if !@tag_handle.null?
       write_tag_handle(@tag_handle, @tag_handle_length)
       write_tag_content(@tag_suffix, @tag_suffix_length, false) unless @tag_suffix.null?
@@ -1121,7 +1133,8 @@ class YAML::Emitter
     @indention = true
   end
 
-  # yaml_emitter_write_indicator (inlined: indicators are short constants)
+  # yaml_emitter_write_indicator (inlined: indicators are short constants).
+  # Every indicator is ASCII, so its WRITEs are PUTs (same FLUSH points).
   @[AlwaysInline]
   private def write_indicator(indicator : String, need_whitespace : Bool, is_whitespace : Bool, is_indention : Bool) : Nil
     put(' '.ord.to_u8) if need_whitespace && !@whitespace
@@ -1129,7 +1142,8 @@ class YAML::Emitter
     size = indicator.bytesize
     i = 0
     while i != size
-      i = write(p, i)
+      put(p[i])
+      i &+= 1
     end
     @whitespace = is_whitespace
     @indention = @indention && is_indention
