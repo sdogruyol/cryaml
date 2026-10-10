@@ -485,6 +485,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_scalar
+  @[AlwaysInline]
   private def emit_scalar(event : Event*) : Nil
     select_scalar_style(event)
     process_anchor
