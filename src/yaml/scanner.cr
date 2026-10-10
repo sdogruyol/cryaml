@@ -979,31 +979,22 @@ class YAML::Scanner < YAML::Reader
 
   # The run of characters at the current position that a quoted scalar takes
   # as they are: no blank or break, no quote, no escape in double quotes.
-  # `#ascii_run(2)` with that condition, eight bytes at a time (the flags
-  # work as in `#block_plain_run`).
+  # `#ascii_run(2)` with that condition, eight bytes at a time (see the SWAR
+  # notes in `Chars`).
   @[AlwaysInline]
   private def quoted_run(single : Bool) : Int32
     p = pointer
     limit = @unread &- 2
     quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
-    quotes = single ? 0x2727272727272727_u64 : 0x2222222222222222_u64
     # The scanner comes back for a run right after the character that ended
     # the last one, so the first byte alone often settles it.
     return 0 unless 0 < limit && quoted_run_char?(p[0], quote, single)
     n = 1
     while n &+ 8 <= limit
-      word = uninitialized UInt64
-      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
-      quoted = word ^ quotes
-      stop = word |
-             ((word &- 0x2121212121212121_u64) & ~word) |
-             ((quoted &- 0x0101010101010101_u64) & ~quoted)
-      unless single
-        escaped = word ^ 0x5C5C5C5C5C5C5C5C_u64
-        stop |= (escaped &- 0x0101010101010101_u64) & ~escaped
-      end
-      stop &= 0x8080808080808080_u64
-      return n &+ zero_bytes_before(stop) if stop != 0
+      word = Chars.load_word(p + n)
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x21) | Chars.equal_mask(word, quote)
+      stop |= Chars.equal_mask(word, '\\'.ord.to_u8) unless single
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
       n &+= 8
     end
     while n < limit && quoted_run_char?(p[n], quote, single)
@@ -1206,7 +1197,8 @@ class YAML::Scanner < YAML::Reader
     end
   end
 
-  # `#plain_run` in the block context, eight bytes at a time.
+  # `#plain_run` in the block context, eight bytes at a time (see the SWAR
+  # notes in `Chars`).
   @[AlwaysInline]
   private def block_plain_run : Int32
     p = pointer
@@ -1215,20 +1207,11 @@ class YAML::Scanner < YAML::Reader
     # Every character takes at least one byte, so while at least eight more
     # characters are allowed the next eight bytes are decoded.
     while n &+ 8 <= limit
-      word = uninitialized UInt64
-      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
-      # Sets the high bit of the bytes that end the run: those that have it
-      # set, those below 0x21 (they borrow when 0x21 is subtracted) and ':'
-      # (zero after the XOR, so it borrows when 1 is subtracted). A borrow
-      # only passes on from a byte that is itself flagged, so the first
-      # flagged byte in memory order is the first that ends the run; on
-      # big-endian targets a borrow can also flag earlier bytes, which only
-      # cuts the run short (see `Reader#printable_ascii_prefix`).
-      colons = word ^ 0x3A3A3A3A3A3A3A3A_u64
-      stop = (word |
-              ((word &- 0x2121212121212121_u64) & ~word) |
-              ((colons &- 0x0101010101010101_u64) & ~colons)) & 0x8080808080808080_u64
-      return n &+ zero_bytes_before(stop) if stop != 0
+      word = Chars.load_word(p + n)
+      # The bytes that end the run: not ASCII, blanks, breaks and controls
+      # (below 0x21), and ':'.
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x21) | Chars.equal_mask(word, ':'.ord.to_u8)
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
       n &+= 8
     end
     while n < limit

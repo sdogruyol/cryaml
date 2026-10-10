@@ -224,11 +224,9 @@ class YAML::Builder
     # two overlapping words that cover them are.
     if size >= 4 && size <= 16
       if size >= 8
-        head = uninitialized UInt64
-        tail = uninitialized UInt64
-        pointerof(head).as(Pointer(UInt8)).copy_from(p, 8)
-        pointerof(tail).as(Pointer(UInt8)).copy_from(p + size - 8, 8)
-        return true if (head | tail) & 0x8080808080808080_u64 == 0
+        head = Chars.load_word(p)
+        tail = Chars.load_word(p + size - 8)
+        return true if Chars.non_ascii_mask(head | tail) == 0
       else
         head32 = uninitialized UInt32
         tail32 = uninitialized UInt32
@@ -242,9 +240,7 @@ class YAML::Builder
       # Fast path: skip ASCII, eight bytes at once while they fit. `i` stays
       # below `size`, so `&+` can't overflow.
       while size &- i >= 8
-        word = uninitialized UInt64
-        pointerof(word).as(Pointer(UInt8)).copy_from(p + i, 8)
-        break unless word & 0x8080808080808080_u64 == 0
+        break unless Chars.non_ascii_mask(Chars.load_word(p + i)) == 0
         i &+= 8
       end
       while i < size && p[i] < 0x80

@@ -126,4 +126,57 @@ module YAML::Chars
       0
     end
   end
+
+  # SWAR ("SIMD within a register"): the fast paths look at eight bytes at a
+  # time, loaded into a UInt64. The masks below set the high bit (0x80) of
+  # every byte in a class, and are zero exactly when no byte is. Subtracting
+  # can borrow, and adding can carry, from a flagged byte into the next more
+  # significant one, which may then be flagged as well. On little-endian
+  # targets that is a later byte in memory, so the first flagged byte is
+  # exact; on big-endian ones it is an earlier byte, so a run can only end
+  # early and the caller's per-byte path takes over from there.
+  SWAR_ONES = 0x0101010101010101_u64
+  SWAR_HIGH = 0x8080808080808080_u64
+
+  # The eight bytes at *p*, at any alignment.
+  @[AlwaysInline]
+  def load_word(p : Pointer(UInt8)) : UInt64
+    word = uninitialized UInt64
+    pointerof(word).as(Pointer(UInt8)).copy_from(p, 8)
+    word
+  end
+
+  # The bytes of *word* with the high bit set (not ASCII).
+  @[AlwaysInline]
+  def non_ascii_mask(word : UInt64) : UInt64
+    word & SWAR_HIGH
+  end
+
+  # The ASCII bytes of *word* below *byte* (at most 0x80): they borrow when
+  # *byte* is subtracted.
+  @[AlwaysInline]
+  def below_mask(word : UInt64, byte : UInt8) : UInt64
+    (word &- byte.to_u64 &* SWAR_ONES) & ~word & SWAR_HIGH
+  end
+
+  # The bytes of *word* equal to *byte*: zero after the XOR, so they borrow
+  # when 1 is subtracted.
+  @[AlwaysInline]
+  def equal_mask(word : UInt64, byte : UInt8) : UInt64
+    x = word ^ (byte.to_u64 &* SWAR_ONES)
+    (x &- SWAR_ONES) & ~x & SWAR_HIGH
+  end
+
+  # Number of zero bytes, in memory order, before the first nonzero one of
+  # the nonzero *word* (for a mask: before the first flagged byte).
+  @[AlwaysInline]
+  def zero_bytes_before(word : UInt64) : Int32
+    # `IO::ByteFormat::SystemEndian` is always `LittleEndian` in Crystal 1.21,
+    # so test the byte order directly; LLVM folds this to a constant.
+    if 1_u16.unsafe_as(StaticArray(UInt8, 2))[0] == 1
+      word.trailing_zeros_count.to_i32 // 8
+    else
+      word.leading_zeros_count.to_i32 // 8
+    end
+  end
 end

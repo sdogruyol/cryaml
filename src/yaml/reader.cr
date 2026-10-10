@@ -244,11 +244,9 @@ class YAML::Reader
     # Every character takes at least one byte, so while at least eight more
     # characters are allowed the next eight bytes are decoded.
     while n &+ 8 <= limit
-      word = uninitialized UInt64
-      pointerof(word).as(Pointer(UInt8)).copy_from(p + n, 8)
       # Zero exactly in the bytes that are spaces.
-      other = word ^ 0x2020202020202020_u64
-      return n &+ zero_bytes_before(other) if other != 0
+      other = Chars.load_word(p + n) ^ (' '.ord.to_u64 &* Chars::SWAR_ONES)
+      return n &+ Chars.zero_bytes_before(other) if other != 0
       n &+= 8
     end
     while n < limit && p[n] == ' '.ord
@@ -471,10 +469,8 @@ class YAML::Reader
       # the next eight bytes, up to the first other byte, which is then
       # decoded below.
       if last - pos >= 8
-        word = uninitialized UInt64
-        pointerof(word).as(Pointer(UInt8)).copy_from(raw + pos, 8)
-        mask = non_printable_ascii_mask(word)
-        good = mask == 0 ? 8 : printable_ascii_prefix(mask)
+        mask = non_printable_ascii_mask(Chars.load_word(raw + pos))
+        good = mask == 0 ? 8 : Chars.zero_bytes_before(mask)
         (out + out_pos).copy_from(raw + pos, 8) if copy
         out_pos &+= good
         pos &+= good
@@ -546,39 +542,12 @@ class YAML::Reader
     sync_decode_state(pos, out_pos, unread)
   end
 
-  # Sets the high bit of the bytes of *word* (eight bytes as loaded from
-  # memory) that are outside 0x20..0x7E: those with the high bit set, those
-  # that reach 0x80 when 1 is added (0x7F), and those that borrow when 0x20
-  # is subtracted (below 0x20). A carry or borrow only leaves a byte that is
-  # itself flagged, so the lowest flagged byte is the first one out of range
-  # and the mask is zero exactly when all eight are in range.
+  # The bytes of *word* outside 0x20..0x7E (see the SWAR notes in `Chars`):
+  # those with the high bit set, those that reach 0x80 when 1 is added (0x7F),
+  # and those below 0x20.
   @[AlwaysInline]
   private def non_printable_ascii_mask(word : UInt64) : UInt64
-    (word | (word &+ 0x0101010101010101_u64) | ((word &- 0x2020202020202020_u64) & ~word)) & 0x8080808080808080_u64
-  end
-
-  # Number of bytes, in memory order, before the first one flagged in a
-  # nonzero *mask*. On big-endian targets a borrow or carry from a later
-  # byte can also flag an earlier one, which only shortens the prefix: those
-  # bytes then take the per-character path.
-  @[AlwaysInline]
-  private def printable_ascii_prefix(mask : UInt64) : Int32
-    zero_bytes_before(mask)
-  end
-
-  # Number of zero bytes, in memory order, before the first nonzero one of
-  # the nonzero *word* (eight bytes as loaded from memory). The first byte is
-  # the lowest one on little-endian targets and the highest on big-endian
-  # ones.
-  @[AlwaysInline]
-  private def zero_bytes_before(word : UInt64) : Int32
-    # `IO::ByteFormat::SystemEndian` is always `LittleEndian` in Crystal 1.21,
-    # so test the byte order directly; LLVM folds this to a constant.
-    if 1_u16.unsafe_as(StaticArray(UInt8, 2))[0] == 1
-      word.trailing_zeros_count.to_i32 // 8
-    else
-      word.leading_zeros_count.to_i32 // 8
-    end
+    Chars.non_ascii_mask(word | (word &+ Chars::SWAR_ONES)) | Chars.below_mask(word, 0x20)
   end
 
   @[AlwaysInline]
