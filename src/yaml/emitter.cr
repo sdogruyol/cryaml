@@ -60,7 +60,7 @@ class YAML::Emitter
   @indents = Stack(Int32).new
   # The current document's %TAG directives; the defaults are added by
   # `#each_tag_directive` once `@default_tag_directives` is set.
-  @tag_directives = [] of {String, String}
+  @tag_directives : Array({String, String})? = nil
   @default_tag_directives = false
   @indent = -1
   @flow_level = 0
@@ -223,21 +223,23 @@ class YAML::Emitter
 
   # yaml_emitter_append_tag_directive, for the document's own directives.
   private def append_tag_directive(value : {String, String}) : Nil
-    @tag_directives.each do |directive|
+    directives = @tag_directives ||= [] of {String, String}
+    directives.each do |directive|
       error("duplicate %TAG directive") if directive[0] == value[0]
     end
-    @tag_directives << value
+    directives << value
   end
 
   # The tag directives in effect, in libyaml's order: the document's own,
   # then the default ones whose handle they don't take (libyaml appends
-  # those to the list with `allow_duplicates`; they aren't stored here, to
-  # save allocating the list for most documents).
+  # those to the list with `allow_duplicates`; they aren't stored here, so
+  # most emitters never allocate the list).
   private def each_tag_directive(& : {String, String} ->) : Nil
-    @tag_directives.each { |directive| yield directive }
+    directives = @tag_directives
+    directives.try &.each { |directive| yield directive }
     return unless @default_tag_directives
     DEFAULT_TAG_DIRECTIVES.each do |default|
-      next if @tag_directives.any? { |directive| directive[0] == default[0] }
+      next if directives.try &.any? { |directive| directive[0] == default[0] }
       yield default
     end
   end
@@ -380,7 +382,7 @@ class YAML::Emitter
       end
       flush
       @state = State::DOCUMENT_START
-      @tag_directives.clear
+      @tag_directives.try &.clear
       @default_tag_directives = false
       return
     end
