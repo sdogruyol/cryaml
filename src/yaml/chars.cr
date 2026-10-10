@@ -2,6 +2,9 @@
 #
 # Character classification on UTF-8 byte buffers, mirroring the `IS_*_AT`
 # macros of libyaml's `yaml_private.h`. Offsets are byte offsets from *p*.
+# `o &+ 1` and `o &+ 2` (no overflow check, which every inlined copy would
+# carry) only follow a lead byte at *o*: the bytes after it, or the NUL
+# after the buffer, are at offsets within the buffer's `Int32` size.
 module YAML::Chars
   extend self
 
@@ -52,13 +55,13 @@ module YAML::Chars
     c = p[o]
     c == 0x0A ||
       (c >= 0x20 && c <= 0x7E) ||
-      (c == 0xC2 && p[o + 1] >= 0xA0) ||
+      (c == 0xC2 && p[o &+ 1] >= 0xA0) ||
       (c > 0xC2 && c < 0xED) ||
-      (c == 0xED && p[o + 1] < 0xA0) ||
+      (c == 0xED && p[o &+ 1] < 0xA0) ||
       c == 0xEE ||
       (c == 0xEF &&
-        !(p[o + 1] == 0xBB && p[o + 2] == 0xBF) &&
-        !(p[o + 1] == 0xBF && (p[o + 2] == 0xBE || p[o + 2] == 0xBF)))
+        !(p[o &+ 1] == 0xBB && p[o &+ 2] == 0xBF) &&
+        !(p[o &+ 1] == 0xBF && (p[o &+ 2] == 0xBE || p[o &+ 2] == 0xBF)))
   end
 
   @[AlwaysInline]
@@ -68,7 +71,7 @@ module YAML::Chars
 
   @[AlwaysInline]
   def bom?(p : Pointer(UInt8), o : Int32 = 0) : Bool
-    p[o] == 0xEF && p[o + 1] == 0xBB && p[o + 2] == 0xBF
+    p[o] == 0xEF && p[o &+ 1] == 0xBB && p[o &+ 2] == 0xBF
   end
 
   @[AlwaysInline]
@@ -91,13 +94,13 @@ module YAML::Chars
   def break?(p : Pointer(UInt8), o : Int32 = 0) : Bool
     c = p[o]
     c == '\r'.ord || c == '\n'.ord ||
-      (c == 0xC2 && p[o + 1] == 0x85) ||
-      (c == 0xE2 && p[o + 1] == 0x80 && (p[o + 2] == 0xA8 || p[o + 2] == 0xA9))
+      (c == 0xC2 && p[o &+ 1] == 0x85) ||
+      (c == 0xE2 && p[o &+ 1] == 0x80 && (p[o &+ 2] == 0xA8 || p[o &+ 2] == 0xA9))
   end
 
   @[AlwaysInline]
   def crlf?(p : Pointer(UInt8), o : Int32 = 0) : Bool
-    p[o] == '\r'.ord && p[o + 1] == '\n'.ord
+    p[o] == '\r'.ord && p[o &+ 1] == '\n'.ord
   end
 
   @[AlwaysInline]
