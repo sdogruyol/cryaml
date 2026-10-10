@@ -1302,7 +1302,14 @@ class YAML::Scanner < YAML::Reader
               "found a tab character that violates indentation")
           end
           if leading_blanks
-            skip
+            # Fast path: `SKIP` + `CACHE(1)` repeated over the indentation
+            # of the next line.
+            n = space_run(1)
+            if n > 0
+              skip_ascii(n)
+            else
+              skip
+            end
           else
             read(whitespaces)
           end
