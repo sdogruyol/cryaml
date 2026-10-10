@@ -89,7 +89,7 @@ class YAML::Emitter
   @block_allowed = false
   @scalar_style = ScalarStyle::ANY
   # Not in libyaml: set by analyze_scalar when the scalar is one simple word
-  # (see `#simple_scalar`), which write_plain_scalar copies at once.
+  # (see `#simple_scalar`), which `#write_plain_word?` copies at once.
   @ascii_word = false
 
   def initialize(@io : IO)
@@ -491,9 +491,25 @@ class YAML::Emitter
     process_anchor
     process_tag
     increase_indent(true, false)
-    process_scalar
+    process_scalar unless write_plain_word?
     @indent = @indents.pop
     @state = @states.pop
+  end
+
+  # The usual case of process_scalar, inlined: a plain one-word ASCII
+  # scalar (see `@ascii_word`) with room for it and a space before it before
+  # the next FLUSH. Writes what write_plain_scalar would.
+  @[AlwaysInline]
+  private def write_plain_word? : Bool
+    length = @scalar_length
+    return false unless @scalar_style.plain? && @ascii_word && length < @write_limit - @pos
+    put(' '.ord.to_u8) unless @whitespace
+    (@buffer + @pos).copy_from(@scalar_value, length)
+    @pos &+= length # below @write_limit
+    @column += length
+    @whitespace = false
+    @indention = false
+    true
   end
 
   # yaml_emitter_emit_sequence_start
@@ -987,14 +1003,6 @@ class YAML::Emitter
     @buffer = @buffer.realloc(@capacity)
   end
 
-  # Whether *count* more bytes can be written without a FLUSH, growing the
-  # buffer for them if needed.
-  private def grow_for?(count : Int32) : Bool
-    return false unless count <= OUTPUT_BUFFER_SIZE - 5 - @pos
-    grow_buffer
-    true
-  end
-
   # PUT
   @[AlwaysInline]
   private def put(value : UInt8) : Nil
@@ -1187,18 +1195,6 @@ class YAML::Emitter
     # Avoid trailing spaces for empty values in block mode.
     if !@whitespace && (length != 0 || @flow_level > 0)
       put(' '.ord.to_u8)
-    end
-
-    # Fast path: the loop below would WRITE a one-word ASCII scalar (see
-    # `@ascii_word`, which describes *p*) character by character; copy it
-    # at once if no FLUSH would happen on the way.
-    if @ascii_word && (length <= @write_limit - @pos || grow_for?(length))
-      (@buffer + @pos).copy_from(p, length)
-      @pos += length
-      @column += length
-      @whitespace = false
-      @indention = false
-      return
     end
 
     i = 0
