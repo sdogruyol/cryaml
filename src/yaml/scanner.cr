@@ -16,6 +16,9 @@ class YAML::Scanner < YAML::Reader
 
   @tokens = Queue(Token).new
   @token_available = false
+  # Token numbers and character indices count input, so they can't overflow
+  # an `Int64` and are computed with wrapping arithmetic; a token number
+  # minus `@tokens_parsed` is a position in the queue (an `Int32`).
   @tokens_parsed = 0_i64
   @stream_start_produced = false
   @stream_end_produced = false
@@ -71,7 +74,7 @@ class YAML::Scanner < YAML::Reader
   # libyaml `SKIP_TOKEN`.
   @[AlwaysInline]
   def skip_token : Nil
-    @tokens_parsed += 1
+    @tokens_parsed &+= 1
     token = @tokens.shift
     @stream_end_produced = token.kind.stream_end?
     # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
@@ -197,7 +200,7 @@ class YAML::Scanner < YAML::Reader
     while i < size
       simple_key = @simple_keys.unsafe_fetch(i)
       if simple_key.possible
-        if simple_key.mark.line < @line || simple_key.mark.index + 1024 < @index
+        if simple_key.mark.line < @line || simple_key.mark.index &+ 1024 < @index
           if simple_key.required
             scanner_error("while scanning a simple key", simple_key.mark,
               "could not find expected ':'")
@@ -205,7 +208,7 @@ class YAML::Scanner < YAML::Reader
           @simple_keys[i] = simple_key.copy_with(possible: false)
         else
           stale_key_line = Math.min(stale_key_line, simple_key.mark.line)
-          stale_key_index = Math.min(stale_key_index, simple_key.mark.index + 1024)
+          stale_key_index = Math.min(stale_key_index, simple_key.mark.index &+ 1024)
         end
       end
       i += 1
@@ -230,12 +233,12 @@ class YAML::Scanner < YAML::Reader
   private def save_simple_key : Nil
     required = @flow_level == 0 && @indent == @column
     if @simple_key_allowed
-      simple_key = SimpleKey.new(true, required, @tokens_parsed + @tokens.size, mark)
+      simple_key = SimpleKey.new(true, required, @tokens_parsed &+ @tokens.size, mark)
       remove_simple_key
       current_simple_key.value = simple_key
       @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
-      @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index + 1024)
+      @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index &+ 1024)
     end
   end
 
@@ -275,7 +278,7 @@ class YAML::Scanner < YAML::Reader
       if number == -1
         @tokens << token
       else
-        @tokens.insert((number - @tokens_parsed).to_i32, token)
+        @tokens.insert((number &- @tokens_parsed).to_i32!, token)
       end
     end
   end
@@ -398,7 +401,7 @@ class YAML::Scanner < YAML::Reader
     pointer = current_simple_key
     simple_key = pointer.value
     if simple_key.possible
-      @tokens.insert((simple_key.token_number - @tokens_parsed).to_i32,
+      @tokens.insert((simple_key.token_number &- @tokens_parsed).to_i32!,
         Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
       roll_indent(simple_key.mark.column, simple_key.token_number,
         TokenKind::BLOCK_MAPPING_START, simple_key.mark)

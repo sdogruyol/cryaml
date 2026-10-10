@@ -451,9 +451,9 @@ class YAML::Reader
         mask = non_printable_ascii_mask(word)
         good = mask == 0 ? 8 : printable_ascii_prefix(mask)
         (out + out_pos).copy_from(raw + pos, 8) if copy
-        out_pos += good
-        pos += good
-        unread += good
+        out_pos &+= good
+        pos &+= good
+        unread &+= good
         next if mask == 0
       end
 

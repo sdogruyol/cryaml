@@ -4,7 +4,8 @@
 # macros. The queued items are `@buffer[@head...@tail]`, and
 # `yaml_queue_extend` makes room at the tail by moving them to the front or
 # by doubling the buffer. Dequeued slots are cleared, so their strings can be
-# collected (libyaml frees each dequeued token and event).
+# collected (libyaml frees each dequeued token and event). Indices never
+# leave `0..@capacity`, so they use wrapping arithmetic (no overflow check).
 class YAML::Queue(T)
   INITIAL_CAPACITY = 4
 
@@ -16,7 +17,7 @@ class YAML::Queue(T)
 
   @[AlwaysInline]
   def size : Int32
-    @tail - @head
+    @tail &- @head
   end
 
   @[AlwaysInline]
@@ -53,7 +54,7 @@ class YAML::Queue(T)
     raise IndexError.new if empty?
     item = @buffer[@head]
     (@buffer + @head).clear
-    @head += 1
+    @head &+= 1
     if @head == @tail
       @head = 0
       @tail = 0
@@ -66,7 +67,7 @@ class YAML::Queue(T)
   def <<(item : T) : self
     extend_queue if @tail == @capacity
     @buffer[@tail] = item
-    @tail += 1
+    @tail &+= 1
     self
   end
 
@@ -75,15 +76,15 @@ class YAML::Queue(T)
   def insert(index : Int32, item : T) : self
     raise IndexError.new unless 0 <= index <= size
     extend_queue if @tail == @capacity
-    at = @head + index
+    at = @head &+ index
     # Usually only an item or two follow the insertion point.
     i = @tail
     while i > at
-      @buffer[i] = @buffer[i - 1]
-      i -= 1
+      @buffer[i] = @buffer[i &- 1]
+      i &-= 1
     end
     @buffer[at] = item
-    @tail += 1
+    @tail &+= 1
     self
   end
 
@@ -110,6 +111,7 @@ end
 # The state, indentation and mark stacks of the scanner, parser and emitter:
 # libyaml's `STACK` macros (`PUSH`, `POP`). Unlike `Array#push` and
 # `Array#pop`, both are inlined at the call site, as the macros are in libyaml.
+# `@size` never leaves `0..@capacity`, so it uses wrapping arithmetic.
 class YAML::Stack(T)
   INITIAL_CAPACITY = 4
 
@@ -123,7 +125,7 @@ class YAML::Stack(T)
   def push(item : T) : self
     extend_stack if @size == @capacity
     @buffer[@size] = item
-    @size += 1
+    @size &+= 1
     self
   end
 
@@ -136,7 +138,7 @@ class YAML::Stack(T)
   @[AlwaysInline]
   def pop : T
     raise IndexError.new if @size == 0
-    @size -= 1
+    @size &-= 1
     @buffer[@size]
   end
 
