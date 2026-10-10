@@ -212,34 +212,39 @@ class YAML::Builder
   # libyaml `yaml_check_utf8`: well-formed sequences without overlong forms.
   # Unlike `String#valid_encoding?` it accepts encoded surrogates and code
   # points above U+10FFFF, which the emitter writes as escapes.
+  @[AlwaysInline]
   private def utf8?(string : String?) : Bool
-    return true unless string
-    bytes = string.to_slice
+    string.nil? || utf8_string?(string)
+  end
+
+  private def utf8_string?(string : String) : Bool
+    p = string.to_unsafe
+    size = string.bytesize
     i = 0
-    while i < bytes.size
-      # Fast path: eight ASCII bytes at once.
-      if bytes.size - i >= 8
+    while i < size
+      # Fast path: skip ASCII, eight bytes at once while they fit. `i` stays
+      # below `size`, so `&+` can't overflow.
+      while size &- i >= 8
         word = uninitialized UInt64
-        pointerof(word).as(Pointer(UInt8)).copy_from(bytes.to_unsafe + i, 8)
-        if word & 0x8080808080808080_u64 == 0
-          i += 8
-          next
-        end
+        pointerof(word).as(Pointer(UInt8)).copy_from(p + i, 8)
+        break unless word & 0x8080808080808080_u64 == 0
+        i &+= 8
       end
-      octet = bytes[i]
-      if octet < 0x80
-        i += 1
-        next
+      while i < size && p[i] < 0x80
+        i &+= 1
       end
-      width = Chars.width(bytes.to_unsafe, i)
-      return false if width == 0 || i + width > bytes.size
-      value = (width == 1 ? octet & 0x7F : width == 2 ? octet & 0x1F : width == 3 ? octet & 0x0F : octet & 0x07).to_u32
+      break if i == size
+
+      octet = p[i]
+      width = Chars.width(p, i)
+      return false if width == 0 || i + width > size
+      value = (width == 2 ? octet & 0x1F : width == 3 ? octet & 0x0F : octet & 0x07).to_u32
       (1...width).each do |k|
-        octet = bytes[i + k]
+        octet = p[i + k]
         return false if octet & 0xC0 != 0x80
         value = (value << 6) + (octet & 0x3F)
       end
-      return false unless width == 1 || (width == 2 && value >= 0x80) ||
+      return false unless (width == 2 && value >= 0x80) ||
                           (width == 3 && value >= 0x800) || (width == 4 && value >= 0x10000)
       i += width
     end
