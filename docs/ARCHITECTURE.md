@@ -72,7 +72,9 @@ text.
   flushed where libyaml flushes (document end, stream end, `Builder#flush`,
   buffer full), using `IO#write_string` like the stdlib's write callback. As in
   libyaml the buffer is emptied before writing, so output an IO failed to
-  write is dropped rather than written twice.
+  write is dropped rather than written twice. The buffer is GC memory, so it
+  starts at 1 KiB and grows to 16 KiB when that fills up; it is still flushed
+  only when 16 KiB would be full, so the IO sees the same writes.
 - **`yaml_check_utf8`.** `Builder` accepts exactly what libyaml's event
   constructors accept, including encoded surrogates and code points above
   U+10FFFF, which the emitter writes as escapes.
@@ -91,6 +93,12 @@ The hot loops keep libyaml's structure but do less per character:
 - bounds on the live simple keys make most stale-key checks free;
 - `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call.
   Dequeued slots are cleared so their strings can be collected.
+- the emitter takes events by pointer (`yaml_event_t *`), and an event that
+  needs no lookahead is processed without going through the queue when
+  nothing is queued, which is what libyaml's queue loop would do at once;
+- most scalars are printable ASCII without breaks, edge spaces or
+  indicators; `analyze_scalar` recognizes them with two bit sets in one pass,
+  and a plain one-word scalar is copied to the buffer at once.
 
 ### Deliberate differences from libyaml
 

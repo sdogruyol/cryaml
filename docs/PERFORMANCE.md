@@ -72,14 +72,14 @@ gains the least (0.99x-1.90x).
 | helm values, `YAML.parse_all` | 4.46M | 2.42M | 4.48M |
 | small config, `YAML.parse_all` x200 | 52.5M | 37.5M | 47.9M |
 | manifests 100 KB, `Nodes.parse_all` | 26.2M | 17.5M | 23.8M |
-| `to_yaml` of manifests 100 KB | 25.5M | 19.97M | 21.14M |
-| `to_yaml` of helm values | 1.59M | 1.18M | 1.30M |
-| `to_yaml` of flow 200 KB | 81.0M | 72.1M | 70.8M |
+| `to_yaml` of manifests 100 KB | 25.5M | 15.58M | 21.14M |
+| `to_yaml` of helm values | 1.59M | 0.85M | 1.30M |
+| `to_yaml` of flow 200 KB | 81.0M | 55.7M | 70.8M |
 
-The last row is the one where cryaml runs more instructions, about 2%. About
-half of each total is the shared `Any#to_yaml` code, which is the same on both
-sides, so the whole difference (about 1.3M here, 2.1M at 0.1.1) is in the
-emitter.
+About half of each `to_yaml` total is the shared `Any#to_yaml` code, which is
+the same on both sides, so the whole difference (15.1M on the flow document)
+is in `Builder` and the emitter, which now run roughly half of libyaml's
+instructions there.
 How the engine got there is in [ARCHITECTURE.md](ARCHITECTURE.md#performance-techniques).
 
 ## Memory
@@ -107,6 +107,13 @@ up to 48 KB, smaller for short strings) are ordinary GC memory, so the
 difference is roughly constant. On the bare event walk cryaml creates each
 scalar's `String` while scanning, the binding only when `PullParser#value` is
 called; code that skips values pays for strings it never reads.
+
+For `to_yaml` the emitter's 16 KB output buffer is the same kind of
+difference: libyaml mallocs it, cryaml allocates it on the GC heap. It starts
+at 1 KB and grows to 16 KB only when that fills up (flushes still happen
+where libyaml's 16 KB buffer would flush), so a 1 KB config allocates 13.6 KB
+per `to_yaml` (stdlib 11.7 KB) and larger outputs about 18 KB more than the
+stdlib.
 
 ## Reproduce
 
