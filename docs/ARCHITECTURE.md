@@ -90,20 +90,34 @@ The hot loops keep libyaml's structure but do less per character:
 - where the C code does `READ`/`SKIP` + `CACHE`, or `WRITE` + `FLUSH`, per
   character, the scanner and emitter copy runs of ASCII at once. Runs stop
   before a refill or flush would happen, so those still happen at the same
-  characters. Indentation, plain scalars in the block context and quoted
+  characters. Indentation, plain scalars (block and flow context) and quoted
   scalars are scanned eight bytes at a time (SWAR flags; on big-endian
   targets a run can only end early);
 - single-line plain scalars are taken straight from the input string (one
-  copy, with their character count, so `String#size` needn't rescan them),
-  and a simple key (`key:`) is recognized before the general plain scalar
-  loop is set up;
+  copy, with their character count, so `String#size` needn't rescan them).
+  When such a scalar visibly ends (a simple key's `: `, a flow indicator, or
+  a line break followed only by LF breaks and spaces before a smaller
+  indentation) it is returned before the general loop and its scratch
+  strings are set up; a one-line quoted scalar without escapes is taken
+  from the input the same way. These shortcuts only apply while enough
+  characters are decoded that every `CACHE` they skip would be a no-op;
 - the parser builds each event in place, where `PullParser` reads it, and
   `SKIP_TOKEN` leaves the next token available unless a simple key is
-  pending (the re-check libyaml makes there is a no-op);
-- bounds on the live simple keys make most stale-key checks free;
-- `Queue` and `Stack` are libyaml's `QUEUE`/`STACK`: no per-push call.
-  Dequeued event slots are cleared so their strings can be collected; token
-  slots are not (as in libyaml, the strings live on in events);
+  pending (the re-check libyaml makes there is a no-op). Possible simple
+  keys' token numbers grow with their flow level, so "is a key pending" is
+  one comparison with the first one's;
+- bounds on the live simple keys make most stale-key checks free, and they
+  reset as soon as no key is possible;
+- `EventParser` is a subclass of `Scanner` (itself a `Reader`), one object
+  like libyaml's `yaml_parser_t`; `Queue` and `Stack` are structs held in
+  it, like libyaml's embedded `QUEUE`/`STACK` fields, so there is no
+  per-push call, allocation or pointer chase. The stream's simple key is a
+  field; only flow levels push theirs. Dequeued event slots are cleared so
+  their strings can be collected; token slots are not (as in libyaml, the
+  strings live on in events);
+- the default `%TAG` directives are looked up after a document's own
+  instead of being copied into its list, and `PullParser` creates its
+  anchor bookkeeping only at the first anchor;
 - position, index and token counters use wrapping arithmetic where they
   provably cannot overflow;
 - the emitter takes events by pointer (`yaml_event_t *`), and an event that
@@ -121,6 +135,11 @@ The hot loops keep libyaml's structure but do less per character:
   prefix of keys already known to be impossible; it visits the same possible
   keys in the same order, so tokens and errors are unchanged, and the same
   input takes about a second.
+- **BLOCK_END runs.** Leaving a structure *n* levels deep makes libyaml
+  queue *n* BLOCK_END tokens at once (the queue grows to 512 tokens for the
+  deep benchmark). cryaml queues one entry that `SKIP_TOKEN` hands out *n*
+  times; token numbers count queue entries, so simple keys still land at
+  the same positions, and the parser sees the same tokens.
 - **Malformed UTF-8 in `Builder`.** libyaml's event constructors reject it;
   the binding ignored the failure and re-emitted the previous event (which can
   end in `free(): double free detected`, or in an unrelated error). cryaml

@@ -37,14 +37,16 @@ class YAML::PullParser
   # reached.
   property alias_anchor_multiplier = 10
 
+  # Created by the first anchor that needs them: most documents have none.
+  @anchor_scope : Hash(Int32, {String, Int32})? = nil
+  @anchor_costs : Hash(String, Int32)? = nil
+
   def initialize(@content : String | IO)
     @parser = EventParser.new(content)
 
     @nesting = 0
     @anchors = 0
     @aliases = 0
-    @anchor_scope = Hash(Int32, {String, Int32}).new
-    @anchor_costs = Hash(String, Int32).new
 
     read_next
     raise "Expected STREAM_START" unless kind.stream_start?
@@ -312,21 +314,21 @@ class YAML::PullParser
     end
 
     if anchor = @anchor
-      @anchor_scope[@nesting] = {anchor, @aliases}
+      (@anchor_scope ||= Hash(Int32, {String, Int32}).new)[@nesting] = {anchor, @aliases}
     end
   end
 
   private def decrease_nesting
-    if scope = @anchor_scope.delete(@nesting)
+    if (anchor_scope = @anchor_scope) && (scope = anchor_scope.delete(@nesting))
       anchor, aliases = scope
-      @anchor_costs[anchor] = @aliases - aliases
+      (@anchor_costs ||= Hash(String, Int32).new)[anchor] = @aliases - aliases
     end
 
     @nesting -= 1
   end
 
   private def increase_alias
-    aliases = @anchor_costs[@anchor]? || 0
+    aliases = @anchor_costs.try(&.[@anchor]?) || 0
     @aliases += aliases + 1
 
     if @enforce_alias_anchor_ratio &&

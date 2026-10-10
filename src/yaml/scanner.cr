@@ -1,3 +1,5 @@
+require "./reader"
+
 # :nodoc:
 #
 # A port of libyaml 0.2.5 `scanner.c`: turns the decoded character stream of
@@ -20,13 +22,21 @@ class YAML::Scanner < YAML::Reader
   # an `Int64` and are computed with wrapping arithmetic; a token number
   # minus `@tokens_parsed` is a position in the queue (an `Int32`).
   @tokens_parsed = 0_i64
+  # A run of BLOCK_END tokens queued as one entry (see `#unroll_indent`).
+  @block_end_run = 0
+  @block_end_run_token = 0_i64
   @stream_start_produced = false
   @stream_end_produced = false
   @indent = -1
   @indents = Stack(Int32).new
   @simple_key_allowed = false
-  @simple_keys = [] of SimpleKey
-  # Every simple key below this index is known not to be possible. libyaml
+  # libyaml's `simple_keys` stack holds one key per flow level, the stream's
+  # (level 0) at the bottom. Here the stream's key is a field of its own and
+  # the stack only holds those of flow levels 1 to `@flow_level`, so block
+  # documents never allocate it (see `#simple_key_at`).
+  @simple_key = SimpleKey.new(false, false, 0_i64, Mark.new)
+  @flow_simple_keys = Stack(SimpleKey).new
+  # Every simple key below this level is known not to be possible. libyaml
   # walks the whole stack on every token, which is quadratic in the flow
   # nesting depth; starting at the floor visits the same possible keys in
   # the same order, so behavior is unchanged.
@@ -37,6 +47,15 @@ class YAML::Scanner < YAML::Reader
   # nothing to do.
   @stale_key_line = Int64::MAX
   @stale_key_index = Int64::MAX
+  # The token number of the possible simple key of the lowest flow level
+  # (`Int64::MAX` when there is none). A key is saved at the innermost
+  # level, after the keys of the levels around it, so the token numbers of
+  # possible keys increase with their level and this is the smallest; and
+  # the parser never gets past a possible key's token, so none is smaller
+  # than `@tokens_parsed`. A possible key is therefore the next token
+  # exactly when this is `@tokens_parsed`: libyaml's search of the stack in
+  # `yaml_parser_fetch_more_tokens` is one comparison.
+  @first_key_token = Int64::MAX
   @flow_level = 0
   @scanner_error : ParseException? = nil
 
@@ -74,8 +93,16 @@ class YAML::Scanner < YAML::Reader
   # libyaml `SKIP_TOKEN`.
   @[AlwaysInline]
   def skip_token : Nil
+    kind = @tokens.first_pointer.value.kind
+    if kind.block_end? && @block_end_run != 0 && @block_end_run_token == @tokens_parsed
+      # One of the BLOCK_END tokens the entry at the head stands for (see
+      # `#unroll_indent`): the entry stays, and so does its availability.
+      @block_end_run &-= 1
+      return
+    end
     @tokens_parsed &+= 1
-    @stream_end_produced = @tokens.shift_keeping_slot.kind.stream_end?
+    @tokens.shift_keeping_slot
+    @stream_end_produced = kind.stream_end?
     # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
     # `yaml_parser_fetch_more_tokens`. While tokens remain, that function
     # first checks for stale simple keys, which is a no-op: the position
@@ -94,14 +121,7 @@ class YAML::Scanner < YAML::Reader
   # needed to decide whether a KEY goes before it.
   @[AlwaysInline]
   private def simple_key_pending? : Bool
-    i = @possible_floor
-    size = @simple_keys.size
-    while i < size
-      simple_key = @simple_keys.unsafe_fetch(i)
-      return true if simple_key.possible && simple_key.token_number == @tokens_parsed
-      i += 1
-    end
-    false
+    @first_key_token == @tokens_parsed
   end
 
   # yaml_parser_fetch_more_tokens
@@ -194,67 +214,98 @@ class YAML::Scanner < YAML::Reader
   private def remove_stale_simple_keys : Nil
     stale_key_line = Int64::MAX
     stale_key_index = Int64::MAX
-    i = @possible_floor
-    size = @simple_keys.size
-    while i < size
-      simple_key = @simple_keys.unsafe_fetch(i)
+    first_key_token = Int64::MAX
+    level = @possible_floor
+    while level <= @flow_level
+      pointer = simple_key_at(level)
+      simple_key = pointer.value
       if simple_key.possible
         if simple_key.mark.line < @line || simple_key.mark.index &+ 1024 < @index
           if simple_key.required
             scanner_error("while scanning a simple key", simple_key.mark,
               "could not find expected ':'")
           end
-          @simple_keys[i] = simple_key.copy_with(possible: false)
+          pointer.value = simple_key.copy_with(possible: false)
         else
           stale_key_line = Math.min(stale_key_line, simple_key.mark.line)
           stale_key_index = Math.min(stale_key_index, simple_key.mark.index &+ 1024)
+          first_key_token = Math.min(first_key_token, simple_key.token_number)
         end
       end
-      i += 1
+      level += 1
     end
     @stale_key_line = stale_key_line
     @stale_key_index = stale_key_index
-    while @possible_floor < size && !@simple_keys.unsafe_fetch(@possible_floor).possible
+    @first_key_token = first_key_token
+    while @possible_floor <= @flow_level && !simple_key_at(@possible_floor).value.possible
       @possible_floor += 1
     end
   end
 
+  # The simple key of flow level *level* (libyaml's `simple_keys.start +
+  # level`), for `0 <= level <= @flow_level`.
+  @[AlwaysInline]
+  private def simple_key_at(level : Int32) : Pointer(SimpleKey)
+    level == 0 ? pointerof(@simple_key) : @flow_simple_keys.to_unsafe + (level &- 1)
+  end
+
   # The simple key of the current flow level (libyaml's
-  # `simple_keys.top - 1`). The stack is never empty here: the stream's key
-  # is pushed by `#fetch_stream_start` before any other token is fetched,
-  # and `#decrease_flow_level` only pops the keys of flow levels.
+  # `simple_keys.top - 1`).
   @[AlwaysInline]
   private def current_simple_key : Pointer(SimpleKey)
-    @simple_keys.to_unsafe + (@simple_keys.size - 1)
+    simple_key_at(@flow_level)
   end
 
   # yaml_parser_save_simple_key
+  @[AlwaysInline]
   private def save_simple_key : Nil
     required = @flow_level == 0 && @indent == @column
     if @simple_key_allowed
       simple_key = SimpleKey.new(true, required, @tokens_parsed &+ @tokens.size, mark)
-      remove_simple_key
-      current_simple_key.value = simple_key
-      @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
+      pointer = current_simple_key
+      remove_simple_key(pointer)
+      pointer.value = simple_key
+      @possible_floor = Math.min(@possible_floor, @flow_level)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
       @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index &+ 1024)
+      # Any other possible key has a smaller token number.
+      @first_key_token = Math.min(@first_key_token, simple_key.token_number)
     end
   end
 
-  # yaml_parser_remove_simple_key
-  private def remove_simple_key : Nil
-    pointer = current_simple_key
+  # yaml_parser_remove_simple_key (*pointer* is `#current_simple_key`).
+  @[AlwaysInline]
+  private def remove_simple_key(pointer : Pointer(SimpleKey) = current_simple_key) : Nil
     simple_key = pointer.value
-    if simple_key.possible && simple_key.required
-      scanner_error("while scanning a simple key", simple_key.mark,
-        "could not find expected ':'")
+    # libyaml stores `possible = 0` unconditionally; a key that is not
+    # possible needs no store.
+    if simple_key.possible
+      if simple_key.required
+        scanner_error("while scanning a simple key", simple_key.mark,
+          "could not find expected ':'")
+      end
+      forget_first_key(simple_key)
+      pointer.value = simple_key.copy_with(possible: false)
     end
-    pointer.value = simple_key.copy_with(possible: false)
+  end
+
+  # Keeps `@first_key_token` up to date when the possible key of the current
+  # flow level stops being possible: if it was the first one, no level below
+  # has a possible key either, so no key at all is possible, and the bounds
+  # that `#stale_simple_keys` checks are reset too.
+  @[AlwaysInline]
+  private def forget_first_key(simple_key : SimpleKey) : Nil
+    if simple_key.token_number == @first_key_token
+      @first_key_token = Int64::MAX
+      @stale_key_line = Int64::MAX
+      @stale_key_index = Int64::MAX
+      @possible_floor = @flow_level &+ 1
+    end
   end
 
   # yaml_parser_increase_flow_level
   private def increase_flow_level : Nil
-    @simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
+    @flow_simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
     @flow_level += 1
   end
 
@@ -262,8 +313,8 @@ class YAML::Scanner < YAML::Reader
   private def decrease_flow_level : Nil
     if @flow_level != 0
       @flow_level -= 1
-      @simple_keys.pop
-      @possible_floor = Math.min(@possible_floor, @simple_keys.size)
+      @flow_simple_keys.pop
+      @possible_floor = Math.min(@possible_floor, @flow_level &+ 1)
     end
   end
 
@@ -277,26 +328,53 @@ class YAML::Scanner < YAML::Reader
       if number == -1
         @tokens << token
       else
-        @tokens.insert((number &- @tokens_parsed).to_i32!, token)
+        insert_token(number, token)
       end
     end
   end
 
+  # QUEUE_INSERT of *token* as token number *number*.
+  @[AlwaysInline]
+  private def insert_token(number : Int64, token : Token) : Nil
+    @tokens.insert((number &- @tokens_parsed).to_i32!, token)
+    # A BLOCK_END run behind it moves one entry back.
+    @block_end_run_token &+= 1 if @block_end_run != 0 && number <= @block_end_run_token
+  end
+
   # yaml_parser_unroll_indent
+  #
+  # libyaml queues one BLOCK_END token per level; leaving a deep structure
+  # queues hundreds of them (all with the same mark) before the next token.
+  # Here one queue entry stands for all of them: `@block_end_run` more are
+  # left at the entry with token number `@block_end_run_token`, and
+  # `#skip_token` hands them out one by one while that entry is the head.
+  # Token numbers count queue entries, so the queue positions they give are
+  # unchanged. Only one run is ever queued at a time (a new one starts at
+  # a line's first token, after the parser took what was queued); should
+  # another come, its tokens are queued one by one.
   @[AlwaysInline]
   private def unroll_indent(column : Int64) : Nil
-    return if @flow_level != 0
+    return if @flow_level != 0 || @indent <= column
+    count = 0
     while @indent > column
-      m = mark
-      @tokens << Token.new(TokenKind::BLOCK_END, m, m)
       @indent = @indents.pop
+      count &+= 1
+    end
+    m = mark
+    @tokens << Token.new(TokenKind::BLOCK_END, m, m)
+    if @block_end_run == 0
+      @block_end_run = count &- 1
+      @block_end_run_token = @tokens_parsed &+ @tokens.size &- 1
+    else
+      (count &- 1).times { @tokens << Token.new(TokenKind::BLOCK_END, m, m) }
     end
   end
 
   # yaml_parser_fetch_stream_start
   private def fetch_stream_start : Nil
     @indent = -1
-    @simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
+    # libyaml pushes the stream's simple key here; `@simple_key` is that
+    # key, not possible yet.
     @simple_key_allowed = true
     @stream_start_produced = true
     m = mark
@@ -400,11 +478,11 @@ class YAML::Scanner < YAML::Reader
     pointer = current_simple_key
     simple_key = pointer.value
     if simple_key.possible
-      @tokens.insert((simple_key.token_number &- @tokens_parsed).to_i32!,
-        Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
+      insert_token(simple_key.token_number, Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
       roll_indent(simple_key.mark.column, simple_key.token_number,
         TokenKind::BLOCK_MAPPING_START, simple_key.mark)
       pointer.value = simple_key.copy_with(possible: false)
+      forget_first_key(simple_key)
       @simple_key_allowed = false
     else
       if @flow_level == 0
@@ -1008,8 +1086,53 @@ class YAML::Scanner < YAML::Reader
     b > 0x20 && b < 0x80 && b != quote && (single || b != '\\'.ord)
   end
 
+  # The run of characters at the current position that a quoted scalar on
+  # one line takes as they are: `#quoted_run` with spaces, while four more
+  # characters stay decoded.
+  @[AlwaysInline]
+  private def quoted_line_run(single : Bool) : Int32
+    p = pointer
+    limit = @unread &- 4
+    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
+    n = 0
+    while n &+ 8 <= limit
+      word = Chars.load_word(p + n)
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x20) | Chars.equal_mask(word, quote)
+      stop |= Chars.equal_mask(word, '\\'.ord.to_u8) unless single
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit
+      b = p[n]
+      break unless b >= 0x20 && b < 0x80 && b != quote && (single || b != '\\'.ord)
+      n &+= 1
+    end
+    n
+  end
+
   # yaml_parser_scan_flow_scalar
   private def scan_flow_scalar(single : Bool) : Token
+    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
+
+    start_mark = mark
+    skip
+
+    # Fast path: a quoted scalar on one line without escapes is the input
+    # between its quotes, which the loop below copies to `string` piece by
+    # piece (spaces through `whitespaces`). With four characters to spare
+    # after the closing quote every `CACHE` of the loop is a no-op, so the
+    # value can be taken from the input at once.
+    if verbatim_input?
+      n = quoted_line_run(single)
+      if n &+ 4 <= @unread && byte(n) == quote && !(single && check?('\'', n &+ 1))
+        start = input_offset
+        skip_ascii(n)
+        skip
+        return Token.new(TokenKind::SCALAR, start_mark, mark, value: input_to_s(start, start &+ n, n),
+          style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
+      end
+    end
+
     string = @string
     leading_break = @leading_break
     trailing_breaks = @trailing_breaks
@@ -1018,11 +1141,6 @@ class YAML::Scanner < YAML::Reader
     leading_break.clear
     trailing_breaks.clear
     whitespaces.clear
-
-    quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
-
-    start_mark = mark
-    skip
 
     while true
       cache(4)
@@ -1196,14 +1314,7 @@ class YAML::Scanner < YAML::Reader
   # to be joined: `#ascii_run(2)` with that condition.
   @[AlwaysInline]
   private def plain_run : Int32
-    if @flow_level == 0
-      block_plain_run
-    else
-      ascii_run(2) do |b|
-        b > 0x20 && b != ':'.ord &&
-          !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord)
-      end
-    end
+    @flow_level == 0 ? block_plain_run : flow_plain_run
   end
 
   # `#plain_run` in the block context, eight bytes at a time (see the SWAR
@@ -1231,6 +1342,77 @@ class YAML::Scanner < YAML::Reader
     n
   end
 
+  # `#plain_run` in the flow context, eight bytes at a time: the run also
+  # ends at ',', '[', ']', '{' and '}'. Setting bit 0x20 of every byte turns
+  # '[' into '{' and ']' into '}', and no other byte into either, so two
+  # comparisons find all four.
+  @[AlwaysInline]
+  private def flow_plain_run : Int32
+    p = pointer
+    limit = @unread &- 2
+    n = 0
+    while n &+ 8 <= limit
+      word = Chars.load_word(p + n)
+      folded = word | (0x20_u64 &* Chars::SWAR_ONES)
+      stop = Chars.non_ascii_mask(word) | Chars.below_mask(word, 0x21) |
+             Chars.equal_mask(word, ':'.ord.to_u8) | Chars.equal_mask(word, ','.ord.to_u8) |
+             Chars.equal_mask(folded, '{'.ord.to_u8) | Chars.equal_mask(folded, '}'.ord.to_u8)
+      return n &+ Chars.zero_bytes_before(stop) if stop != 0
+      n &+= 8
+    end
+    while n < limit
+      b = p[n]
+      break unless b > 0x20 && b < 0x80 && b != ':'.ord && !flow_indicator?(b)
+      n &+= 1
+    end
+    n
+  end
+
+  # ',', '[', ']', '{' or '}': what ends a plain scalar in the flow context.
+  @[AlwaysInline]
+  private def flow_indicator?(b : UInt8) : Bool
+    b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord
+  end
+
+  # At the line break that follows a plain scalar in the block context,
+  # whether only line breaks and spaces lie between it and the next line
+  # indented less than *indent*, so the scalar ends here. If so, skips them
+  # and returns true: the loop of `#scan_plain_scalar` would skip them too,
+  # after copying the breaks to scratch strings that end up unused.
+  #
+  # Only LF breaks and spaces are skipped this way, and only while two more
+  # characters stay decoded (so every `CACHE` the loop does there is a
+  # no-op). Anything else (tabs, which can be errors; other breaks; the end
+  # of the input; a line that continues the scalar) is left to the loop.
+  @[AlwaysInline]
+  private def skip_to_dedent?(indent : Int32) : Bool
+    p = pointer
+    limit = @unread &- 2
+    i = 0
+    lines = 0
+    column = 0
+    while i < limit
+      b = p[i]
+      if b == '\n'.ord
+        lines &+= 1
+        column = 0
+      elsif b == ' '.ord
+        column &+= 1
+      else
+        # Any character that can start a token or a comment.
+        return false unless b > 0x20 && b < 0x80 && column < indent
+        @index &+= i
+        @line &+= lines
+        @column = column.to_i64
+        @unread &-= i
+        @pos &+= i
+        return true
+      end
+      i &+= 1
+    end
+    false
+  end
+
   # yaml_parser_scan_plain_scalar
   private def scan_plain_scalar : Token
     start_mark = end_mark = mark
@@ -1245,22 +1427,30 @@ class YAML::Scanner < YAML::Reader
     # Fast path for the first round of the loop below, which usually ends
     # the scalar: its `CACHE(4)` finds the characters `#fetch_next_token`
     # just decoded, a document indicator or a comment would have been
-    # fetched as such, so it consumes a run of characters. If a ':' and a
-    # blank follow (a simple key), that ends the scalar with nothing else to
-    # do; otherwise the loop carries on after the run.
+    # fetched as such, so it consumes a run of characters. Then the scalar
+    # often ends with nothing else to do; otherwise the loop carries on
+    # after the run.
     resume = false
     if verbatim
       n = plain_run
       if n > 0
-        # `#plain_run` leaves the two characters after the run decoded.
-        if check?(':', n) && blankz?(n &+ 1)
-          skip_ascii(n)
-          return Token.new(TokenKind::SCALAR, start_mark, mark,
-            value: input_to_s(verbatim_start, input_offset, n), style: ScalarStyle::PLAIN)
-        end
+        # `#plain_run` leaves the two characters after the run decoded. The
+        # loop would stop at once at a ':' and a blank (a simple key) or, in
+        # a flow collection, at a flow indicator.
+        c = byte(n)
+        ends = (c == ':'.ord && blankz?(n &+ 1)) || (@flow_level != 0 && flow_indicator?(c))
         skip_ascii(n)
         verbatim_end = input_offset
         end_mark = mark
+        if !ends && @flow_level == 0 && c == '\n'.ord && skip_to_dedent?(@indent &+ 1)
+          # What the loop does when the scalar ends with its line.
+          @simple_key_allowed = true
+          ends = true
+        end
+        if ends
+          return Token.new(TokenKind::SCALAR, start_mark, end_mark,
+            value: input_to_s(verbatim_start, verbatim_end, n), style: ScalarStyle::PLAIN)
+        end
         resume = true
       end
     end
@@ -1319,9 +1509,7 @@ class YAML::Scanner < YAML::Reader
           end
         end
 
-        if (c == ':'.ord && blankz?(1)) ||
-           (@flow_level != 0 &&
-           (c == ','.ord || c == '['.ord || c == ']'.ord || c == '{'.ord || c == '}'.ord))
+        if (c == ':'.ord && blankz?(1)) || (@flow_level != 0 && flow_indicator?(c))
           break
         end
 

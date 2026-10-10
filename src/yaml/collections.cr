@@ -6,7 +6,12 @@
 # by doubling the buffer. Dequeued slots are cleared, so their strings can be
 # collected (libyaml frees each dequeued token and event). Indices never
 # leave `0..@capacity`, so they use wrapping arithmetic (no overflow check).
-class YAML::Queue(T)
+#
+# A struct, held in an instance variable of its owner like libyaml's queue
+# fields of `yaml_parser_t` and `yaml_emitter_t`: no allocation of its own and
+# no indirection on every access. Methods called on that instance variable
+# update it in place; it must never be copied (assigned or passed around).
+struct YAML::Queue(T)
   INITIAL_CAPACITY = 4
 
   # Allocated by the first `#<<`.
@@ -88,16 +93,15 @@ class YAML::Queue(T)
 
   # ENQUEUE
   @[AlwaysInline]
-  def <<(item : T) : self
+  def <<(item : T) : Nil
     extend_queue if @tail == @capacity
     @buffer[@tail] = item
     @tail &+= 1
-    self
   end
 
   # QUEUE_INSERT: inserts *item* *index* positions after the head.
   @[AlwaysInline]
-  def insert(index : Int32, item : T) : self
+  def insert(index : Int32, item : T) : Nil
     raise IndexError.new unless 0 <= index <= size
     extend_queue if @tail == @capacity
     at = @head &+ index
@@ -109,7 +113,6 @@ class YAML::Queue(T)
     end
     @buffer[at] = item
     @tail &+= 1
-    self
   end
 
   # yaml_queue_extend
@@ -135,8 +138,9 @@ end
 # The state, indentation and mark stacks of the scanner, parser and emitter:
 # libyaml's `STACK` macros (`PUSH`, `POP`). Unlike `Array#push` and
 # `Array#pop`, both are inlined at the call site, as the macros are in libyaml.
-# `@size` never leaves `0..@capacity`, so it uses wrapping arithmetic.
-class YAML::Stack(T)
+# `@size` never leaves `0..@capacity`, so it uses wrapping arithmetic. A
+# struct, held in an instance variable and never copied, like `Queue`.
+struct YAML::Stack(T)
   INITIAL_CAPACITY = 4
 
   # Allocated by the first `#push`.
@@ -146,15 +150,14 @@ class YAML::Stack(T)
 
   # PUSH
   @[AlwaysInline]
-  def push(item : T) : self
+  def push(item : T) : Nil
     extend_stack if @size == @capacity
     @buffer[@size] = item
     @size &+= 1
-    self
   end
 
   @[AlwaysInline]
-  def <<(item : T) : self
+  def <<(item : T) : Nil
     push(item)
   end
 
@@ -164,6 +167,13 @@ class YAML::Stack(T)
     raise IndexError.new if @size == 0
     @size &-= 1
     @buffer[@size]
+  end
+
+  # The bottom of the stack (libyaml's `start`), valid until the next
+  # `#push`.
+  @[AlwaysInline]
+  def to_unsafe : Pointer(T)
+    @buffer
   end
 
   # yaml_stack_extend
