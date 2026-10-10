@@ -123,11 +123,13 @@ class YAML::Reader
     @buffer_offset &+ @pos
   end
 
-  # The input between two `#input_offset`s, as a new string. The bytes were
-  # validated as they were decoded.
+  # The input between two `#input_offset`s, as a new string of *size*
+  # characters (the bytes were validated as they were decoded). Knowing the
+  # size spares `String#size` a pass over the bytes, and the code that
+  # resolves scalars (`YAML::Schema::Core`) asks for it.
   @[AlwaysInline]
-  def input_to_s(start : Int32, finish : Int32) : String
-    String.new(@raw + start, finish &- start)
+  def input_to_s(start : Int32, finish : Int32, size : Int32) : String
+    String.new(@raw + start, finish &- start, size)
   end
 
   # Appends the input between two `#input_offset`s to *string*.

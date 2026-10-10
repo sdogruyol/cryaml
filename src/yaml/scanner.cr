@@ -1150,8 +1150,49 @@ class YAML::Scanner < YAML::Reader
       style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
   end
 
+  # Characters that can extend a plain scalar without any of the checks of
+  # `#scan_plain_scalar` (no ':', no flow indicator in a flow collection),
+  # when no whitespace is waiting to be joined.
+  @[AlwaysInline]
+  private def plain_run_char?(b : UInt8) : Bool
+    b > 0x20 && b != ':'.ord &&
+      (@flow_level == 0 || !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord))
+  end
+
   # yaml_parser_scan_plain_scalar
   private def scan_plain_scalar : Token
+    start_mark = end_mark = mark
+
+    # Until a line break is folded into it, the value is the input from its
+    # first to its last character, so with `#verbatim_input?` nothing is
+    # copied to `string`: only where the value ends is tracked, and the
+    # string is made from the input in one go.
+    verbatim = verbatim_input?
+    verbatim_start = verbatim_end = input_offset
+
+    # Fast path for the first round of the loop below, which usually ends
+    # the scalar: its `CACHE(4)` finds the characters `#fetch_next_token`
+    # just decoded, a document indicator or a comment would have been
+    # fetched as such, so it consumes a run of characters. If a ':' and a
+    # blank follow (a simple key), that ends the scalar with nothing else to
+    # do; otherwise the loop carries on after the run.
+    resume = false
+    if verbatim
+      n = ascii_run(2) { |b| plain_run_char?(b) }
+      if n > 0
+        # `#ascii_run` leaves the two characters after the run decoded.
+        if check?(':', n) && blankz?(n &+ 1)
+          skip_ascii(n)
+          return Token.new(TokenKind::SCALAR, start_mark, mark,
+            value: input_to_s(verbatim_start, input_offset, n), style: ScalarStyle::PLAIN)
+        end
+        skip_ascii(n)
+        verbatim_end = input_offset
+        end_mark = mark
+        resume = true
+      end
+    end
+
     string = @string
     leading_break = @leading_break
     trailing_breaks = @trailing_breaks
@@ -1164,36 +1205,27 @@ class YAML::Scanner < YAML::Reader
     leading_blanks = false
     indent = @indent + 1
 
-    start_mark = end_mark = mark
-
-    # Until a line break is folded into it, the value is the input from its
-    # first to its last character, so with `#verbatim_input?` nothing is
-    # copied to `string`: only where the value ends is tracked, and the
-    # string is made from the input in one go.
-    verbatim = verbatim_input?
-    verbatim_start = verbatim_end = input_offset
-
     while true
-      cache(4)
+      unless resume
+        cache(4)
 
-      if @column == 0 &&
-         ((check?('-', 0) && check?('-', 1) && check?('-', 2)) ||
-         (check?('.', 0) && check?('.', 1) && check?('.', 2))) &&
-         blankz?(3)
-        break
+        if @column == 0 &&
+           ((check?('-', 0) && check?('-', 1) && check?('-', 2)) ||
+           (check?('.', 0) && check?('.', 1) && check?('.', 2))) &&
+           blankz?(3)
+          break
+        end
+
+        break if check?('#')
       end
-
-      break if check?('#')
+      resume = false
 
       until blankz?
         # Fast path: a run of characters that need none of the checks below
         # (no ':' or flow indicator, no pending whitespace to join) is
         # `READ` + `CACHE(2)` repeated.
         if !leading_blanks && whitespaces.empty?
-          n = ascii_run(2) do |b|
-            b > 0x20 && b != ':'.ord &&
-              (@flow_level == 0 || !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord))
-          end
+          n = ascii_run(2) { |b| plain_run_char?(b) }
           if n > 0
             if verbatim
               skip_ascii(n)
@@ -1290,7 +1322,8 @@ class YAML::Scanner < YAML::Reader
       break if @flow_level == 0 && @column < indent
     end
 
-    value = verbatim ? input_to_s(verbatim_start, verbatim_end) : string.to_s
+    # A verbatim value has as many characters as lie between the marks.
+    value = verbatim ? input_to_s(verbatim_start, verbatim_end, (end_mark.index &- start_mark.index).to_i32!) : string.to_s
     token = Token.new(TokenKind::SCALAR, start_mark, end_mark, value: value,
       style: ScalarStyle::PLAIN)
 
