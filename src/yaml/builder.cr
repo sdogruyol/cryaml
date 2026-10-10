@@ -204,7 +204,7 @@ class YAML::Builder
       raise YAML::Error.new("Error emitting #{event_name}: invalid UTF-8 string")
     end
 
-    slot = @emitter.event_slot(event.kind)
+    slot = @emitter.event_slot
     slot.value = event
     unless @emitter.emit(slot)
       raise YAML::Error.new("Error emitting #{event_name}: #{@emitter.problem}")
