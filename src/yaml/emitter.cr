@@ -691,23 +691,10 @@ class YAML::Emitter
     @tag_suffix_length = size
   end
 
-  # yaml_emitter_analyze_scalar
+  # yaml_emitter_analyze_scalar. Inlined up to the fast path; the general
+  # case is in `#analyze_scalar_characters`.
+  @[AlwaysInline]
   private def analyze_scalar(value : Pointer(UInt8), length : Int32) : Nil
-    block_indicators = false
-    flow_indicators = false
-    line_breaks = false
-    special_characters = false
-
-    leading_space = false
-    leading_break = false
-    trailing_space = false
-    trailing_break = false
-    break_space = false
-    space_break = false
-
-    previous_space = false
-    previous_break = false
-
     @scalar_value = value
     @scalar_length = length
     @ascii_word = false
@@ -731,6 +718,26 @@ class YAML::Emitter
       @ascii_word = !spaces
       return
     end
+
+    analyze_scalar_characters(value, length)
+  end
+
+  # The rest of yaml_emitter_analyze_scalar (*length* > 0).
+  private def analyze_scalar_characters(value : Pointer(UInt8), length : Int32) : Nil
+    block_indicators = false
+    flow_indicators = false
+    line_breaks = false
+    special_characters = false
+
+    leading_space = false
+    leading_break = false
+    trailing_space = false
+    trailing_break = false
+    break_space = false
+    space_break = false
+
+    previous_space = false
+    previous_break = false
 
     s = value
     if (s[0] == '-'.ord && s[1] == '-'.ord && s[2] == '-'.ord) ||
@@ -924,7 +931,8 @@ class YAML::Emitter
     {true, spaces}
   end
 
-  # yaml_emitter_analyze_event
+  # yaml_emitter_analyze_event (inlined: mostly a few stores)
+  @[AlwaysInline]
   private def analyze_event(event : Event*) : Nil
     @anchor = Pointer(UInt8).null
     @anchor_length = 0
