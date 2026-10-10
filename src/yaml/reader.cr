@@ -49,6 +49,11 @@ class YAML::Reader
   # characters move to a small buffer of their own that can carry the final
   # NUL and the zero padding, and decoding continues as for any other input.
   @in_place = false
+  # Whether every decoded byte is the input byte at `@buffer_offset` plus its
+  # index in `@buffer` (a `String` in UTF-8, in place or not), so that the
+  # scanner can take values straight from the input (`#input_offset`).
+  @verbatim_input = false
+  @buffer_offset = 0
 
   # Current position (libyaml `parser->mark`).
   @index = 0_i64
@@ -102,6 +107,33 @@ class YAML::Reader
   @[AlwaysInline]
   def pointer : Pointer(UInt8)
     @buffer.to_unsafe + @pos
+  end
+
+  # Whether the decoded characters are the input's own bytes, so that a value
+  # made of consecutive characters can be taken from the input directly.
+  @[AlwaysInline]
+  def verbatim_input? : Bool
+    @verbatim_input
+  end
+
+  # Offset in the input string of the current position (when
+  # `#verbatim_input?`).
+  @[AlwaysInline]
+  def input_offset : Int32
+    @buffer_offset + @pos
+  end
+
+  # The input between two `#input_offset`s, as a new string. The bytes were
+  # validated as they were decoded.
+  @[AlwaysInline]
+  def input_to_s(start : Int32, finish : Int32) : String
+    String.new(@raw + start, finish - start)
+  end
+
+  # Appends the input between two `#input_offset`s to *string*.
+  @[AlwaysInline]
+  def write_input(string : ByteBuffer, start : Int32, finish : Int32) : Nil
+    string.write(@raw + start, finish - start)
   end
 
   @[AlwaysInline]
@@ -302,6 +334,7 @@ class YAML::Reader
         buffer = Bytes.new(size + 1 + PADDING)
         buffer.to_unsafe.copy_from(@buffer.to_unsafe + @pos, size)
         @buffer = buffer
+        @buffer_offset = @pos
         @pos = 0
         @last = size + 1
         @unread += 1
@@ -340,6 +373,7 @@ class YAML::Reader
     if @input_string
       if @encoding.utf8?
         @in_place = true
+        @verbatim_input = true
         @buffer = Bytes.new(@raw, @string_size, read_only: true)
         @pos = @last = @raw_pos
       else

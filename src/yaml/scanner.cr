@@ -1138,6 +1138,13 @@ class YAML::Scanner < YAML::Reader
 
     start_mark = end_mark = mark
 
+    # Until a line break is folded into it, the value is the input from its
+    # first to its last character, so with `#verbatim_input?` nothing is
+    # copied to `string`: only where the value ends is tracked, and the
+    # string is made from the input in one go.
+    verbatim = verbatim_input?
+    verbatim_start = verbatim_end = input_offset
+
     while true
       cache(4)
 
@@ -1160,7 +1167,12 @@ class YAML::Scanner < YAML::Reader
               (@flow_level == 0 || !(b == ','.ord || b == '['.ord || b == ']'.ord || b == '{'.ord || b == '}'.ord))
           end
           if n > 0
-            read_ascii(string, n)
+            if verbatim
+              skip_ascii(n)
+              verbatim_end = input_offset
+            else
+              read_ascii(string, n)
+            end
             end_mark = mark
             next
           end
@@ -1183,6 +1195,10 @@ class YAML::Scanner < YAML::Reader
 
         if leading_blanks || !whitespaces.empty?
           if leading_blanks
+            if verbatim
+              write_input(string, verbatim_start, verbatim_end)
+              verbatim = false
+            end
             if leading_break.first_byte == '\n'.ord
               if trailing_breaks.first_byte == 0
                 string << ' '
@@ -1199,12 +1215,19 @@ class YAML::Scanner < YAML::Reader
             end
             leading_blanks = false
           else
-            string.join(whitespaces)
+            # The whitespace is already part of the input between
+            # `verbatim_start` and the next character.
+            string.join(whitespaces) unless verbatim
             whitespaces.clear
           end
         end
 
-        read(string)
+        if verbatim
+          skip
+          verbatim_end = input_offset
+        else
+          read(string)
+        end
         end_mark = mark
         cache(2)
       end
@@ -1239,7 +1262,8 @@ class YAML::Scanner < YAML::Reader
       break if @flow_level == 0 && @column < indent
     end
 
-    token = Token.new(TokenKind::SCALAR, start_mark, end_mark, value: string.to_s,
+    value = verbatim ? input_to_s(verbatim_start, verbatim_end) : string.to_s
+    token = Token.new(TokenKind::SCALAR, start_mark, end_mark, value: value,
       style: ScalarStyle::PLAIN)
 
     @simple_key_allowed = true if leading_blanks
