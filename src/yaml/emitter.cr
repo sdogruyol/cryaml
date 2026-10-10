@@ -1305,51 +1305,7 @@ class YAML::Emitter
       c = p[i]
       if !Chars.printable?(p, i) || (!@unicode && !Chars.ascii?(p, i)) ||
          Chars.bom?(p, i) || Chars.break?(p, i) || c == '"'.ord || c == '\\'.ord
-        octet = c
-        width = (octet & 0x80) == 0x00 ? 1 : (octet & 0xE0) == 0xC0 ? 2 : (octet & 0xF0) == 0xE0 ? 3 : (octet & 0xF8) == 0xF0 ? 4 : 0
-        value = ((octet & 0x80) == 0x00 ? octet & 0x7F : (octet & 0xE0) == 0xC0 ? octet & 0x1F : (octet & 0xF0) == 0xE0 ? octet & 0x0F : (octet & 0xF8) == 0xF0 ? octet & 0x07 : 0).to_u32
-        k = 1
-        while k < width
-          value = (value << 6) + (p[i + k] & 0x3F).to_u32
-          k += 1
-        end
-        i += width
-
-        put('\\'.ord.to_u8)
-
-        case value
-        when   0x00 then put('0'.ord.to_u8)
-        when   0x07 then put('a'.ord.to_u8)
-        when   0x08 then put('b'.ord.to_u8)
-        when   0x09 then put('t'.ord.to_u8)
-        when   0x0A then put('n'.ord.to_u8)
-        when   0x0B then put('v'.ord.to_u8)
-        when   0x0C then put('f'.ord.to_u8)
-        when   0x0D then put('r'.ord.to_u8)
-        when   0x1B then put('e'.ord.to_u8)
-        when   0x22 then put('"'.ord.to_u8)
-        when   0x5C then put('\\'.ord.to_u8)
-        when   0x85 then put('N'.ord.to_u8)
-        when   0xA0 then put('_'.ord.to_u8)
-        when 0x2028 then put('L'.ord.to_u8)
-        when 0x2029 then put('P'.ord.to_u8)
-        else
-          if value <= 0xFF
-            put('x'.ord.to_u8)
-            w = 2
-          elsif value <= 0xFFFF
-            put('u'.ord.to_u8)
-            w = 4
-          else
-            put('U'.ord.to_u8)
-            w = 8
-          end
-          k = (w - 1) * 4
-          while k >= 0
-            put(hex_digit((value >> k) & 0x0F))
-            k -= 4
-          end
-        end
+        i = write_escape(p, i)
         spaces = false
       elsif c == ' '.ord
         if allow_breaks && !spaces && @column > @best_width && i != 0 && i != length - 1
@@ -1373,6 +1329,59 @@ class YAML::Emitter
 
     @whitespace = false
     @indention = false
+  end
+
+  # The escape branch of yaml_emitter_write_double_quoted_scalar, out of
+  # line: escapes are rare. Writes the character at p+i as an escape
+  # sequence and returns the index after it.
+  @[NoInline]
+  private def write_escape(p : Pointer(UInt8), i : Int32) : Int32
+    octet = p[i]
+    width = (octet & 0x80) == 0x00 ? 1 : (octet & 0xE0) == 0xC0 ? 2 : (octet & 0xF0) == 0xE0 ? 3 : (octet & 0xF8) == 0xF0 ? 4 : 0
+    value = ((octet & 0x80) == 0x00 ? octet & 0x7F : (octet & 0xE0) == 0xC0 ? octet & 0x1F : (octet & 0xF0) == 0xE0 ? octet & 0x0F : (octet & 0xF8) == 0xF0 ? octet & 0x07 : 0).to_u32
+    k = 1
+    while k < width
+      value = (value << 6) + (p[i + k] & 0x3F).to_u32
+      k += 1
+    end
+    i += width
+
+    put('\\'.ord.to_u8)
+
+    case value
+    when   0x00 then put('0'.ord.to_u8)
+    when   0x07 then put('a'.ord.to_u8)
+    when   0x08 then put('b'.ord.to_u8)
+    when   0x09 then put('t'.ord.to_u8)
+    when   0x0A then put('n'.ord.to_u8)
+    when   0x0B then put('v'.ord.to_u8)
+    when   0x0C then put('f'.ord.to_u8)
+    when   0x0D then put('r'.ord.to_u8)
+    when   0x1B then put('e'.ord.to_u8)
+    when   0x22 then put('"'.ord.to_u8)
+    when   0x5C then put('\\'.ord.to_u8)
+    when   0x85 then put('N'.ord.to_u8)
+    when   0xA0 then put('_'.ord.to_u8)
+    when 0x2028 then put('L'.ord.to_u8)
+    when 0x2029 then put('P'.ord.to_u8)
+    else
+      if value <= 0xFF
+        put('x'.ord.to_u8)
+        w = 2
+      elsif value <= 0xFFFF
+        put('u'.ord.to_u8)
+        w = 4
+      else
+        put('U'.ord.to_u8)
+        w = 8
+      end
+      k = (w - 1) * 4
+      while k >= 0
+        put(hex_digit((value >> k) & 0x0F))
+        k -= 4
+      end
+    end
+    i
   end
 
   # yaml_emitter_write_block_scalar_hints
@@ -1412,7 +1421,9 @@ class YAML::Emitter
     write_indicator(chomp_hint, false, false, false) if chomp_hint
   end
 
-  # yaml_emitter_write_literal_scalar
+  # yaml_emitter_write_literal_scalar (not inlined into process_scalar:
+  # block scalars are rare)
+  @[NoInline]
   private def write_literal_scalar(p : Pointer(UInt8), length : Int32) : Nil
     breaks = true
 
@@ -1439,7 +1450,9 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_write_folded_scalar
+  # yaml_emitter_write_folded_scalar (not inlined into process_scalar:
+  # block scalars are rare)
+  @[NoInline]
   private def write_folded_scalar(p : Pointer(UInt8), length : Int32) : Nil
     breaks = true
     leading_spaces = true
