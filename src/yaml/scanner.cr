@@ -43,10 +43,6 @@ class YAML::Scanner < YAML::Reader
   @trailing_breaks = ByteBuffer.new
   @whitespaces = ByteBuffer.new
 
-  def initialize(input : String | IO)
-    super(input)
-  end
-
   def stream_end_produced? : Bool
     @stream_end_produced
   end
@@ -561,7 +557,7 @@ class YAML::Scanner < YAML::Reader
     {major, minor}
   end
 
-  MAX_NUMBER_LENGTH = 9
+  private MAX_NUMBER_LENGTH = 9
 
   # yaml_parser_scan_version_directive_number
   private def scan_version_directive_number(start_mark : Mark) : Int32

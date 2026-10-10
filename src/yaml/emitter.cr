@@ -54,7 +54,6 @@ class YAML::Emitter
   @sequence_context = false
   @mapping_context = false
   @simple_key_context = false
-  @line = 0
   @column = 0
   @whitespace = false
   @indention = false
@@ -194,7 +193,6 @@ class YAML::Emitter
       @best_width = 80 if @best_width >= 0 && @best_width <= @best_indent * 2
       @best_width = Int32::MAX if @best_width < 0
       @indent = -1
-      @line = 0
       @column = 0
       @whitespace = true
       @indention = true
@@ -877,7 +875,6 @@ class YAML::Emitter
     @buffer.to_unsafe[@pos] = '\n'.ord.to_u8
     @pos += 1
     @column = 0
-    @line += 1
   end
 
   # COPY: copies one UTF-8 character from p+i, returns the new index.
@@ -939,7 +936,6 @@ class YAML::Emitter
     else
       i = copy(p, i)
       @column = 0
-      @line += 1
       i
     end
   end

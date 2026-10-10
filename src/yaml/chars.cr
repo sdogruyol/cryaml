@@ -6,11 +6,6 @@ module YAML::Chars
   extend self
 
   @[AlwaysInline]
-  def check?(p : Pointer(UInt8), o : Int32, byte : UInt8) : Bool
-    p[o] == byte
-  end
-
-  @[AlwaysInline]
   def alpha?(p : Pointer(UInt8), o : Int32 = 0) : Bool
     c = p[o]
     (c >= '0'.ord && c <= '9'.ord) || (c >= 'A'.ord && c <= 'Z'.ord) ||
@@ -108,11 +103,6 @@ module YAML::Chars
   @[AlwaysInline]
   def breakz?(p : Pointer(UInt8), o : Int32 = 0) : Bool
     break?(p, o) || z?(p, o)
-  end
-
-  @[AlwaysInline]
-  def spacez?(p : Pointer(UInt8), o : Int32 = 0) : Bool
-    space?(p, o) || breakz?(p, o)
   end
 
   @[AlwaysInline]

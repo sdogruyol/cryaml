@@ -36,7 +36,6 @@ class YAML::Reader
   @string_size = 0
   @eof = false
   @encoding = Encoding::NONE
-  @offset = 0_i64
 
   # Decoded UTF-8 buffer.
   @buffer : Bytes
@@ -48,8 +47,6 @@ class YAML::Reader
   @index = 0_i64
   @line = 0_i64
   @column = 0_i64
-
-  @reader_error : ParseException? = nil
 
   def initialize(input : String | IO)
     case input
@@ -107,7 +104,7 @@ class YAML::Reader
     byte(offset) == char.ord
   end
 
-  {% for name in %w(alpha? digit? hex? ascii? printable? z? bom? space? tab? blank? break? crlf? breakz? spacez? blankz?) %}
+  {% for name in %w(alpha? digit? hex? z? bom? space? tab? blank? break? crlf? breakz? blankz?) %}
     @[AlwaysInline]
     def {{name.id}}(offset : Int32 = 0) : Bool
       Chars.{{name.id}}(@buffer.to_unsafe + @pos, offset)
@@ -245,10 +242,6 @@ class YAML::Reader
 
   # libyaml `yaml_parser_update_buffer`.
   def update_buffer(length : Int32) : Nil
-    if error = @reader_error
-      raise error
-    end
-
     return if @eof && @raw_pos == @raw_last
     return if @unread >= length
 
@@ -285,10 +278,10 @@ class YAML::Reader
     end
   end
 
+  # Reader errors are positioned at line 1, column 1, as libyaml's binding
+  # reports them. The scanner keeps raising the stored error afterwards.
   private def reader_error(problem : String) : NoReturn
-    error = ParseException.new(problem, 1, 1)
-    @reader_error = error
-    raise error
+    raise ParseException.new(problem, 1, 1)
   end
 
   private def determine_encoding : Nil
@@ -301,15 +294,12 @@ class YAML::Reader
     if available >= 2 && raw[0] == 0xFF && raw[1] == 0xFE
       @encoding = Encoding::UTF16LE
       @raw_pos += 2
-      @offset += 2
     elsif available >= 2 && raw[0] == 0xFE && raw[1] == 0xFF
       @encoding = Encoding::UTF16BE
       @raw_pos += 2
-      @offset += 2
     elsif available >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF
       @encoding = Encoding::UTF8
       @raw_pos += 3
-      @offset += 3
     else
       @encoding = Encoding::UTF8
     end
@@ -362,7 +352,6 @@ class YAML::Reader
     last = @raw_last
     out_pos = @last
     unread = @unread
-    offset = @offset
 
     while pos < last
       # Fast path: copy the printable ASCII characters (0x20..0x7E) among
@@ -376,7 +365,6 @@ class YAML::Reader
         (out + out_pos).copy_from(raw + pos, 8)
         out_pos += good
         pos += good
-        offset += good
         unread += good
         next if mask == 0
       end
@@ -386,25 +374,24 @@ class YAML::Reader
       # Fast path for printable ASCII, tab, LF and CR.
       if octet < 0x80
         unless (octet >= 0x20 && octet <= 0x7E) || octet == 0x0A || octet == 0x0D || octet == 0x09
-          sync_decode_state(pos, out_pos, unread, offset)
+          sync_decode_state(pos, out_pos, unread)
           reader_error("control characters are not allowed")
         end
         out[out_pos] = octet
         out_pos += 1
         pos += 1
-        offset += 1
         unread += 1
         next
       end
 
       width = octet & 0xE0 == 0xC0 ? 2 : octet & 0xF0 == 0xE0 ? 3 : octet & 0xF8 == 0xF0 ? 4 : 0
       if width == 0
-        sync_decode_state(pos, out_pos, unread, offset)
+        sync_decode_state(pos, out_pos, unread)
         reader_error("invalid leading UTF-8 octet")
       end
 
       if width > last - pos
-        sync_decode_state(pos, out_pos, unread, offset)
+        sync_decode_state(pos, out_pos, unread)
         reader_error("incomplete UTF-8 octet sequence") if @eof
         # Incomplete character: wait for more raw input.
         return
@@ -415,7 +402,7 @@ class YAML::Reader
       while k < width
         trailing = raw[pos + k]
         if trailing & 0xC0 != 0x80
-          sync_decode_state(pos, out_pos, unread, offset)
+          sync_decode_state(pos, out_pos, unread)
           reader_error("invalid trailing UTF-8 octet")
         end
         value = (value << 6) + (trailing & 0x3F)
@@ -423,28 +410,27 @@ class YAML::Reader
       end
 
       unless (width == 2 && value >= 0x80) || (width == 3 && value >= 0x800) || (width == 4 && value >= 0x10000)
-        sync_decode_state(pos, out_pos, unread, offset)
+        sync_decode_state(pos, out_pos, unread)
         reader_error("invalid length of a UTF-8 sequence")
       end
 
       if (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF
-        sync_decode_state(pos, out_pos, unread, offset)
+        sync_decode_state(pos, out_pos, unread)
         reader_error("invalid Unicode character")
       end
 
       unless allowed?(value)
-        sync_decode_state(pos, out_pos, unread, offset)
+        sync_decode_state(pos, out_pos, unread)
         reader_error("control characters are not allowed")
       end
 
       (out + out_pos).copy_from(raw + pos, width)
       out_pos += width
       pos += width
-      offset += width
       unread += 1
     end
 
-    sync_decode_state(pos, out_pos, unread, offset)
+    sync_decode_state(pos, out_pos, unread)
   end
 
   # Sets the high bit of the bytes of *word* (eight bytes as loaded from
@@ -471,11 +457,10 @@ class YAML::Reader
   end
 
   @[AlwaysInline]
-  private def sync_decode_state(pos, out_pos, unread, offset) : Nil
+  private def sync_decode_state(pos, out_pos, unread) : Nil
     @raw_pos = pos
     @last = out_pos
     @unread = unread
-    @offset = offset
   end
 
   private def decode_utf16 : Nil
@@ -514,7 +499,6 @@ class YAML::Reader
       reader_error("control characters are not allowed") unless allowed?(value)
 
       @raw_pos += width
-      @offset += width
       write_utf8(value)
       @unread += 1
     end
