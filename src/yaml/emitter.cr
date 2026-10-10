@@ -1020,7 +1020,17 @@ class YAML::Emitter
       # Fast path: PUT repeated over the spaces that fit before a flush.
       n = Math.min(indent - @column, OUTPUT_BUFFER_SIZE - 5 - @pos)
       if n > 0
-        (@buffer.to_unsafe + @pos).fill(n, ' '.ord.to_u8)
+        buf = @buffer.to_unsafe + @pos
+        if n <= 16 && @pos <= OUTPUT_BUFFER_SIZE - 16
+          # Indents are short: store 16 spaces (inside the buffer) instead
+          # of calling memset. Those past `n` are past the end of the output,
+          # which overwrites them.
+          spaces = 0x2020202020202020_u64
+          buf.copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+          (buf + 8).copy_from(pointerof(spaces).as(Pointer(UInt8)), 8)
+        else
+          buf.fill(n, ' '.ord.to_u8)
+        end
         @pos += n
         @column += n
         next
