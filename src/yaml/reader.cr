@@ -561,6 +561,8 @@ class YAML::Reader
     @unread = unread
   end
 
+  # Not inlined: UTF-16 input is rare.
+  @[NoInline]
   private def decode_utf16 : Nil
     low, high = @encoding.utf16_le? ? {0, 1} : {1, 0}
 

@@ -1066,62 +1066,7 @@ class YAML::Scanner < YAML::Reader
           leading_blanks = true
           break
         elsif !single && c == '\\'.ord
-          code_length = 0
-          case byte(1)
-          when '0'.ord           then string << 0_u8
-          when 'a'.ord           then string << 0x07_u8
-          when 'b'.ord           then string << 0x08_u8
-          when 't'.ord, '\t'.ord then string << 0x09_u8
-          when 'n'.ord           then string << 0x0A_u8
-          when 'v'.ord           then string << 0x0B_u8
-          when 'f'.ord           then string << 0x0C_u8
-          when 'r'.ord           then string << 0x0D_u8
-          when 'e'.ord           then string << 0x1B_u8
-          when ' '.ord           then string << 0x20_u8
-          when '"'.ord           then string << '"'
-          when '/'.ord           then string << '/'
-          when '\\'.ord          then string << '\\'
-          when 'N'.ord           then string << 0xC2_u8 << 0x85_u8
-          when '_'.ord           then string << 0xC2_u8 << 0xA0_u8
-          when 'L'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA8_u8
-          when 'P'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA9_u8
-          when 'x'.ord           then code_length = 2
-          when 'u'.ord           then code_length = 4
-          when 'U'.ord           then code_length = 8
-          else
-            scanner_error("while parsing a quoted scalar", start_mark,
-              "found unknown escape character")
-          end
-
-          skip
-          skip
-
-          if code_length != 0
-            value = 0_u32
-            cache(code_length)
-            k = 0
-            while k < code_length
-              unless hex?(k)
-                scanner_error("while parsing a quoted scalar", start_mark,
-                  "did not find expected hexdecimal number")
-              end
-              value = (value << 4) &+ as_hex(k).to_u32
-              k += 1
-            end
-
-            if (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF
-              scanner_error("while parsing a quoted scalar", start_mark,
-                "found invalid Unicode character escape code")
-            end
-
-            string.write_utf8(value)
-
-            k = 0
-            while k < code_length
-              skip
-              k += 1
-            end
-          end
+          scan_escape(string, start_mark)
         else
           read(string)
         end
@@ -1179,6 +1124,69 @@ class YAML::Scanner < YAML::Reader
 
     Token.new(TokenKind::SCALAR, start_mark, end_mark, value: string.to_s,
       style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
+  end
+
+  # The escape sequence part of yaml_parser_scan_flow_scalar, out of line:
+  # escapes are rare, and the hex digits and UTF-8 encoding of `\x`, `\u`
+  # and `\U` are a large part of the function.
+  @[NoInline]
+  private def scan_escape(string : ByteBuffer, start_mark : Mark) : Nil
+    code_length = 0
+    case byte(1)
+    when '0'.ord           then string << 0_u8
+    when 'a'.ord           then string << 0x07_u8
+    when 'b'.ord           then string << 0x08_u8
+    when 't'.ord, '\t'.ord then string << 0x09_u8
+    when 'n'.ord           then string << 0x0A_u8
+    when 'v'.ord           then string << 0x0B_u8
+    when 'f'.ord           then string << 0x0C_u8
+    when 'r'.ord           then string << 0x0D_u8
+    when 'e'.ord           then string << 0x1B_u8
+    when ' '.ord           then string << 0x20_u8
+    when '"'.ord           then string << '"'
+    when '/'.ord           then string << '/'
+    when '\\'.ord          then string << '\\'
+    when 'N'.ord           then string << 0xC2_u8 << 0x85_u8
+    when '_'.ord           then string << 0xC2_u8 << 0xA0_u8
+    when 'L'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA8_u8
+    when 'P'.ord           then string << 0xE2_u8 << 0x80_u8 << 0xA9_u8
+    when 'x'.ord           then code_length = 2
+    when 'u'.ord           then code_length = 4
+    when 'U'.ord           then code_length = 8
+    else
+      scanner_error("while parsing a quoted scalar", start_mark,
+        "found unknown escape character")
+    end
+
+    skip
+    skip
+
+    if code_length != 0
+      value = 0_u32
+      cache(code_length)
+      k = 0
+      while k < code_length
+        unless hex?(k)
+          scanner_error("while parsing a quoted scalar", start_mark,
+            "did not find expected hexdecimal number")
+        end
+        value = (value << 4) &+ as_hex(k).to_u32
+        k += 1
+      end
+
+      if (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF
+        scanner_error("while parsing a quoted scalar", start_mark,
+          "found invalid Unicode character escape code")
+      end
+
+      string.write_utf8(value)
+
+      k = 0
+      while k < code_length
+        skip
+        k += 1
+      end
+    end
   end
 
   # The run of characters at the current position that can extend a plain
