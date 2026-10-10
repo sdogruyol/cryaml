@@ -232,17 +232,20 @@ class YAML::Scanner < YAML::Reader
   # and `#decrease_flow_level` only pops the keys of flow levels.
   @[AlwaysInline]
   private def current_simple_key : Pointer(SimpleKey)
-    @simple_keys.to_unsafe + (@simple_keys.size - 1)
+    @simple_keys.to_unsafe + (@simple_keys.size &- 1)
   end
 
   # yaml_parser_save_simple_key
+  @[AlwaysInline]
   private def save_simple_key : Nil
     required = @flow_level == 0 && @indent == @column
     if @simple_key_allowed
       simple_key = SimpleKey.new(true, required, @tokens_parsed &+ @tokens.size, mark)
-      remove_simple_key
-      current_simple_key.value = simple_key
-      @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
+      top = @simple_keys.size &- 1
+      pointer = @simple_keys.to_unsafe + top
+      remove_simple_key(pointer)
+      pointer.value = simple_key
+      @possible_floor = Math.min(@possible_floor, top)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
       @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index &+ 1024)
       # Any other possible key has a smaller token number.
@@ -250,18 +253,20 @@ class YAML::Scanner < YAML::Reader
     end
   end
 
-  # yaml_parser_remove_simple_key
-  private def remove_simple_key : Nil
-    pointer = current_simple_key
+  # yaml_parser_remove_simple_key (*pointer* is `#current_simple_key`).
+  @[AlwaysInline]
+  private def remove_simple_key(pointer : Pointer(SimpleKey) = current_simple_key) : Nil
     simple_key = pointer.value
+    # libyaml stores `possible = 0` unconditionally; a key that is not
+    # possible needs no store.
     if simple_key.possible
       if simple_key.required
         scanner_error("while scanning a simple key", simple_key.mark,
           "could not find expected ':'")
       end
       forget_first_key(simple_key)
+      pointer.value = simple_key.copy_with(possible: false)
     end
-    pointer.value = simple_key.copy_with(possible: false)
   end
 
   # Keeps `@first_key_token` up to date when the possible key of the current
