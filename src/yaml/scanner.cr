@@ -217,13 +217,22 @@ class YAML::Scanner < YAML::Reader
     end
   end
 
+  # The simple key of the current flow level (libyaml's
+  # `simple_keys.top - 1`). The stack is never empty here: the stream's key
+  # is pushed by `#fetch_stream_start` before any other token is fetched,
+  # and `#decrease_flow_level` only pops the keys of flow levels.
+  @[AlwaysInline]
+  private def current_simple_key : Pointer(SimpleKey)
+    @simple_keys.to_unsafe + (@simple_keys.size - 1)
+  end
+
   # yaml_parser_save_simple_key
   private def save_simple_key : Nil
     required = @flow_level == 0 && @indent == @column
     if @simple_key_allowed
       simple_key = SimpleKey.new(true, required, @tokens_parsed + @tokens.size, mark)
       remove_simple_key
-      @simple_keys[-1] = simple_key
+      current_simple_key.value = simple_key
       @possible_floor = Math.min(@possible_floor, @simple_keys.size - 1)
       @stale_key_line = Math.min(@stale_key_line, simple_key.mark.line)
       @stale_key_index = Math.min(@stale_key_index, simple_key.mark.index + 1024)
@@ -232,12 +241,13 @@ class YAML::Scanner < YAML::Reader
 
   # yaml_parser_remove_simple_key
   private def remove_simple_key : Nil
-    simple_key = @simple_keys.last
+    pointer = current_simple_key
+    simple_key = pointer.value
     if simple_key.possible && simple_key.required
       scanner_error("while scanning a simple key", simple_key.mark,
         "could not find expected ':'")
     end
-    @simple_keys[-1] = simple_key.copy_with(possible: false)
+    pointer.value = simple_key.copy_with(possible: false)
   end
 
   # yaml_parser_increase_flow_level
@@ -385,13 +395,14 @@ class YAML::Scanner < YAML::Reader
 
   # yaml_parser_fetch_value
   private def fetch_value : Nil
-    simple_key = @simple_keys.last
+    pointer = current_simple_key
+    simple_key = pointer.value
     if simple_key.possible
       @tokens.insert((simple_key.token_number - @tokens_parsed).to_i32,
         Token.new(TokenKind::KEY, simple_key.mark, simple_key.mark))
       roll_indent(simple_key.mark.column, simple_key.token_number,
         TokenKind::BLOCK_MAPPING_START, simple_key.mark)
-      @simple_keys[-1] = simple_key.copy_with(possible: false)
+      pointer.value = simple_key.copy_with(possible: false)
       @simple_key_allowed = false
     else
       if @flow_level == 0
