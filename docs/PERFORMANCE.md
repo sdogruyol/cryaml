@@ -186,19 +186,34 @@ of 3:
 
 | Program | | stdlib (libyaml) | cryaml |
 | --- | --- | ---: | ---: |
-| serializable | LLVM work, release | 52.4G | 62.0G |
-| serializable | LLVM work, debug | 9.8G | 11.6G |
-| serializable | release build | 9.7 s | 11.1 s |
-| serializable | debug build | 8.2 s | 9.0 s |
-| serializable | debug rebuild after an edit | 1.4 s | 1.5 s |
-| serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 895 KB |
-| parse | LLVM work, release | 41.7G | 48.4G |
-| parse | release build | 7.5 s | 9.1 s |
-| bench | LLVM work, release | 58.9G | 68.3G |
-| bench | release build | 10.2 s | 11.8 s |
+| serializable | LLVM work, release | 52.4G | 61.1G |
+| serializable | LLVM work, debug | 9.8G | 11.5G |
+| serializable | release build | 8.4 s | 9.9 s |
+| serializable | debug build | 8.6 s | 9.5 s |
+| serializable | debug rebuild after an edit | 1.4 s | 1.3 s |
+| serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 891 KB |
+| parse | LLVM work, release | 41.7G | 47.6G |
+| parse | LLVM work, debug | 8.7G | 9.9G |
+| parse | release build | 7.0 s | 7.9 s |
+| bench | LLVM work, release | 58.9G | 67.4G |
+| bench | LLVM work, debug | 11.6G | 13.3G |
+| bench | release build | 9.3 s | 10.6 s |
 
 Wall and CPU times vary by several percent between runs on a busy machine;
-the LLVM counts don't (±0.02%).
+the LLVM count of a given program doesn't (±0.02%). Any edit of the engine,
+even one that removes code, moves LLVM's inlining decisions elsewhere, so
+a change shows its effect only beyond about ±0.05G.
+
+What makes that work: LLVM inlines `@[AlwaysInline]` methods (and the
+methods it chooses to inline) at every call, so a primitive called from
+fifty places is optimized fifty times, and a big function called once
+costs less than a small one called often. Crystal compiles a method once
+per combination of argument types and of keyword arguments, which costs
+debug builds most (`Event` and `Token` construction is positional for
+that reason). Merging calls of a state function into one call with a
+runtime flag, or leaving a primitive to LLVM's own inliner, has made both
+compilation and the parser slower in experiments: what LLVM inlines and
+constant-folds there is what keeps the parser fast.
 
 ## Reproduce
 
