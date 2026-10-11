@@ -604,7 +604,7 @@ class YAML::Reader
       reader_error("control characters are not allowed") unless allowed?(value)
 
       @raw_pos += width
-      write_utf8(value)
+      @last += Chars.write_utf8(@buffer.to_unsafe + @last, value)
       @unread += 1
     end
   end
@@ -616,29 +616,6 @@ class YAML::Reader
       value == 0x85 || (value >= 0xA0 && value <= 0xD7FF) ||
       (value >= 0xE000 && value <= 0xFFFD) ||
       (value >= 0x10000 && value <= 0x10FFFF)
-  end
-
-  private def write_utf8(value : UInt32) : Nil
-    out = @buffer.to_unsafe
-    if value <= 0x7F
-      out[@last] = value.to_u8
-      @last += 1
-    elsif value <= 0x7FF
-      out[@last] = (0xC0 + (value >> 6)).to_u8
-      out[@last + 1] = (0x80 + (value & 0x3F)).to_u8
-      @last += 2
-    elsif value <= 0xFFFF
-      out[@last] = (0xE0 + (value >> 12)).to_u8
-      out[@last + 1] = (0x80 + ((value >> 6) & 0x3F)).to_u8
-      out[@last + 2] = (0x80 + (value & 0x3F)).to_u8
-      @last += 3
-    else
-      out[@last] = (0xF0 + (value >> 18)).to_u8
-      out[@last + 1] = (0x80 + ((value >> 12) & 0x3F)).to_u8
-      out[@last + 2] = (0x80 + ((value >> 6) & 0x3F)).to_u8
-      out[@last + 3] = (0x80 + (value & 0x3F)).to_u8
-      @last += 4
-    end
   end
 
   # The decoded buffer only ever holds a few unread characters plus one raw

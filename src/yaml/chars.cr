@@ -121,6 +121,33 @@ module YAML::Chars
     blank?(p, o) || breakz?(p, o)
   end
 
+  # Writes *value* (at most 0x1FFFFF) encoded in UTF-8 at *p*, which has room
+  # for its bytes, and returns their number. Shared by the reader (UTF-16
+  # input) and the scanner (escapes).
+  def write_utf8(p : Pointer(UInt8), value : UInt32) : Int32
+    # Every byte is masked or shifted into 0..0xFF, so `to_u8!` truncates
+    # nothing.
+    if value <= 0x7F
+      p[0] = value.to_u8!
+      1
+    elsif value <= 0x7FF
+      p[0] = (0xC0_u32 | (value >> 6)).to_u8!
+      p[1] = (0x80_u32 | (value & 0x3F)).to_u8!
+      2
+    elsif value <= 0xFFFF
+      p[0] = (0xE0_u32 | (value >> 12)).to_u8!
+      p[1] = (0x80_u32 | ((value >> 6) & 0x3F)).to_u8!
+      p[2] = (0x80_u32 | (value & 0x3F)).to_u8!
+      3
+    else
+      p[0] = (0xF0_u32 | (value >> 18)).to_u8!
+      p[1] = (0x80_u32 | ((value >> 12) & 0x3F)).to_u8!
+      p[2] = (0x80_u32 | ((value >> 6) & 0x3F)).to_u8!
+      p[3] = (0x80_u32 | (value & 0x3F)).to_u8!
+      4
+    end
+  end
+
   # Byte length of the UTF-8 sequence starting at *o* (0 if invalid lead).
   @[AlwaysInline]
   def width(p : Pointer(UInt8), o : Int32 = 0) : Int32

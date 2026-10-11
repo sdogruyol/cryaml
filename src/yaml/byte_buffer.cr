@@ -76,26 +76,8 @@ class YAML::ByteBuffer
   # Appends a single code point encoded as UTF-8 (one capacity check for
   # its bytes, instead of one per byte).
   def write_utf8(value : UInt32) : self
-    count = value <= 0x7F ? 1 : value <= 0x7FF ? 2 : value <= 0xFFFF ? 3 : 4
-    ensure_capacity(count)
-    p = @bytes + @size
-    case count
-    when 1
-      p[0] = value.to_u8
-    when 2
-      p[0] = (0xC0 | (value >> 6)).to_u8
-      p[1] = (0x80 | (value & 0x3F)).to_u8
-    when 3
-      p[0] = (0xE0 | (value >> 12)).to_u8
-      p[1] = (0x80 | ((value >> 6) & 0x3F)).to_u8
-      p[2] = (0x80 | (value & 0x3F)).to_u8
-    else
-      p[0] = (0xF0 | (value >> 18)).to_u8
-      p[1] = (0x80 | ((value >> 12) & 0x3F)).to_u8
-      p[2] = (0x80 | ((value >> 6) & 0x3F)).to_u8
-      p[3] = (0x80 | (value & 0x3F)).to_u8
-    end
-    @size += count
+    ensure_capacity(value <= 0x7F ? 1 : value <= 0x7FF ? 2 : value <= 0xFFFF ? 3 : 4)
+    @size &+= Chars.write_utf8(@bytes + @size, value)
     @dirty = @size if @size > @dirty
     self
   end
