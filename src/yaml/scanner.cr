@@ -103,7 +103,7 @@ class YAML::Scanner < YAML::Reader
     if @lazy_values
       Token.input_scalar(start_mark, end_mark, start, bytesize, style)
     else
-      Token.new(TokenKind::SCALAR, start_mark, end_mark, value: input_to_s(start, start &+ bytesize, bytesize), style: style)
+      Token.scalar(start_mark, end_mark, input_to_s(start, start &+ bytesize, bytesize), style)
     end
   end
 
@@ -616,7 +616,7 @@ class YAML::Scanner < YAML::Reader
       token = Token.version_directive(start_mark, mark, major, minor)
     elsif name == "TAG"
       handle, prefix = scan_tag_directive_value(start_mark)
-      token = Token.new(TokenKind::TAG_DIRECTIVE, start_mark, mark, value: prefix, handle: handle)
+      token = Token.new(TokenKind::TAG_DIRECTIVE, start_mark, mark, prefix, handle)
     else
       scanner_error("while scanning a directive", start_mark, "found unknown directive name")
     end
@@ -774,7 +774,7 @@ class YAML::Scanner < YAML::Reader
         start_mark, "did not find expected alphabetic or numeric character")
     end
 
-    Token.new(kind, start_mark, end_mark, value: string.to_s)
+    Token.new(kind, start_mark, end_mark, string.to_s)
   end
 
   # yaml_parser_scan_tag
@@ -812,7 +812,7 @@ class YAML::Scanner < YAML::Reader
       end
     end
 
-    Token.new(TokenKind::TAG, start_mark, mark, value: suffix, handle: handle)
+    Token.new(TokenKind::TAG, start_mark, mark, suffix, handle)
   end
 
   # yaml_parser_scan_tag_handle
@@ -1037,8 +1037,7 @@ class YAML::Scanner < YAML::Reader
     string.join(leading_break) if chomping != -1
     string.join(trailing_breaks) if chomping == 1
 
-    Token.new(TokenKind::SCALAR, start_mark, end_mark, value: string.to_s,
-      style: literal ? ScalarStyle::LITERAL : ScalarStyle::FOLDED)
+    Token.scalar(start_mark, end_mark, string.to_s, literal ? ScalarStyle::LITERAL : ScalarStyle::FOLDED)
   end
 
   # yaml_parser_scan_block_scalar_breaks; returns the (possibly determined)
@@ -1156,7 +1155,7 @@ class YAML::Scanner < YAML::Reader
         skip_ascii(1)
         style = single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED
         # The run is ASCII (and when empty, there's no string to make).
-        return n == 0 ? Token.new(TokenKind::SCALAR, start_mark, mark, style: style) : input_scalar_token(start_mark, mark, start, n, style)
+        return n == 0 ? Token.scalar(start_mark, mark, "", style) : input_scalar_token(start_mark, mark, start, n, style)
       end
     end
 
@@ -1266,8 +1265,7 @@ class YAML::Scanner < YAML::Reader
     skip_ascii(1)
     end_mark = mark
 
-    Token.new(TokenKind::SCALAR, start_mark, end_mark, value: string.to_s,
-      style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
+    Token.scalar(start_mark, end_mark, string.to_s, single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
   end
 
   # The escape sequence part of yaml_parser_scan_flow_scalar, out of line:
@@ -1617,7 +1615,7 @@ class YAML::Scanner < YAML::Reader
               Token.input_scalar(start_mark, end_mark, verbatim_start, size, ScalarStyle::PLAIN)
             else
               value = verbatim ? input_to_s(verbatim_start, verbatim_end, size) : string.to_s
-              Token.new(TokenKind::SCALAR, start_mark, end_mark, value: value, style: ScalarStyle::PLAIN)
+              Token.scalar(start_mark, end_mark, value, ScalarStyle::PLAIN)
             end
 
     @simple_key_allowed = true if leading_blanks

@@ -51,10 +51,32 @@ struct YAML::Token
   @number1 : Int32
   @number2 : Int32
 
+  # Every field is an argument: a constructor with default or keyword
+  # arguments would be compiled once for each way it is called. The class
+  # methods below make each kind of token.
   def initialize(@kind : TokenKind, @start_mark : Mark, @end_mark : Mark,
-                 @value : String = "", @handle : String = "",
-                 @style : ScalarStyle = ScalarStyle::ANY,
-                 @number1 : Int32 = 0, @number2 : Int32 = 0)
+                 @value : String, @handle : String, @style : ScalarStyle,
+                 @number1 : Int32, @number2 : Int32)
+  end
+
+  # A token with no value (indicators, BLOCK_END, STREAM_START...).
+  def self.new(kind : TokenKind, start_mark : Mark, end_mark : Mark) : self
+    new(kind, start_mark, end_mark, "", "", ScalarStyle::ANY, 0, 0)
+  end
+
+  # An ALIAS or ANCHOR token.
+  def self.new(kind : TokenKind, start_mark : Mark, end_mark : Mark, value : String) : self
+    new(kind, start_mark, end_mark, value, "", ScalarStyle::ANY, 0, 0)
+  end
+
+  # A TAG or TAG_DIRECTIVE token.
+  def self.new(kind : TokenKind, start_mark : Mark, end_mark : Mark, value : String, handle : String) : self
+    new(kind, start_mark, end_mark, value, handle, ScalarStyle::ANY, 0, 0)
+  end
+
+  # A SCALAR token.
+  def self.scalar(start_mark : Mark, end_mark : Mark, value : String, style : ScalarStyle) : self
+    new(TokenKind::SCALAR, start_mark, end_mark, value, "", style, 0, 0)
   end
 
   # A SCALAR token whose value is the ASCII text of *bytesize* (> 0) bytes
@@ -62,11 +84,11 @@ struct YAML::Token
   # asked for (`Scanner#token_value`), so a `PullParser` walking events
   # without reading their values allocates nothing for them.
   def self.input_scalar(start_mark : Mark, end_mark : Mark, offset : Int32, bytesize : Int32, style : ScalarStyle) : self
-    new(TokenKind::SCALAR, start_mark, end_mark, style: style, number1: offset, number2: bytesize)
+    new(TokenKind::SCALAR, start_mark, end_mark, "", "", style, offset, bytesize)
   end
 
   def self.version_directive(start_mark : Mark, end_mark : Mark, major : Int32, minor : Int32) : self
-    new(TokenKind::VERSION_DIRECTIVE, start_mark, end_mark, number1: major, number2: minor)
+    new(TokenKind::VERSION_DIRECTIVE, start_mark, end_mark, "", "", ScalarStyle::ANY, major, minor)
   end
 
   # Tag suffix (TAG tokens).
