@@ -25,29 +25,30 @@ end
 struct YAML::Event
   # `implicit` is declared with the other flags, so that they share their
   # padding: 120 bytes instead of 128.
-  property kind : EventKind
-  property start_mark : Mark
-  property end_mark : Mark
-  property version_directive : {Int32, Int32}?
-  property tag_directives : Array({String, String})?
-  property anchor : String?
-  property tag : String?
-  property value : String
-  property? implicit : Bool
-  property? plain_implicit : Bool
-  property? quoted_implicit : Bool
-  property scalar_style : ScalarStyle
-  property sequence_style : SequenceStyle
-  property mapping_style : MappingStyle
+  property kind : EventKind = EventKind::NONE
+  property start_mark : Mark = Mark.new
+  property end_mark : Mark = Mark.new
+  property version_directive : {Int32, Int32}? = nil
+  property tag_directives : Array({String, String})? = nil
+  property anchor : String? = nil
+  property tag : String? = nil
+  property value : String = ""
+  property? implicit : Bool = false
+  property? plain_implicit : Bool = false
+  property? quoted_implicit : Bool = false
+  property scalar_style : ScalarStyle = ScalarStyle::ANY
+  property sequence_style : SequenceStyle = SequenceStyle::ANY
+  property mapping_style : MappingStyle = MappingStyle::ANY
 
-  def initialize(@kind : EventKind = EventKind::NONE,
-                 @start_mark : Mark = Mark.new, @end_mark : Mark = Mark.new,
-                 *,
-                 @version_directive = nil, @tag_directives = nil,
-                 @implicit = false, @anchor = nil, @tag = nil, @value = "",
-                 @plain_implicit = false, @quoted_implicit = false,
-                 @scalar_style = ScalarStyle::ANY,
-                 @sequence_style = SequenceStyle::ANY,
-                 @mapping_style = MappingStyle::ANY)
+  # The other fields are set one by one: a constructor taking them as
+  # keyword arguments would be compiled once for each combination of
+  # arguments it is called with.
+  def initialize
+  end
+
+  def initialize(@kind : EventKind)
+  end
+
+  def initialize(@kind : EventKind, @start_mark : Mark, @end_mark : Mark)
   end
 end

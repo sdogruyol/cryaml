@@ -189,7 +189,8 @@ class YAML::EventParser < YAML::Scanner
       process_directives
       @states << State::DOCUMENT_END
       @state = State::BLOCK_NODE
-      @event = Event.new(EventKind::DOCUMENT_START, token.start_mark, token.start_mark, implicit: true)
+      @event = Event.new(EventKind::DOCUMENT_START, token.start_mark, token.start_mark)
+      @event.implicit = true
     elsif !kind.stream_end?
       start_mark = token.start_mark
       version_directive, tag_directives = process_directives
@@ -201,8 +202,9 @@ class YAML::EventParser < YAML::Scanner
       @state = State::DOCUMENT_CONTENT
       end_mark = token.end_mark
       skip_token
-      @event = Event.new(EventKind::DOCUMENT_START, start_mark, end_mark,
-        version_directive: version_directive, tag_directives: tag_directives, implicit: false)
+      @event = Event.new(EventKind::DOCUMENT_START, start_mark, end_mark)
+      @event.version_directive = version_directive
+      @event.tag_directives = tag_directives
     else
       @state = State::END
       skip_token
@@ -235,7 +237,8 @@ class YAML::EventParser < YAML::Scanner
     end
     @tag_directives = nil
     @state = State::DOCUMENT_START
-    @event = Event.new(EventKind::DOCUMENT_END, start_mark, end_mark, implicit: implicit)
+    @event = Event.new(EventKind::DOCUMENT_END, start_mark, end_mark)
+    @event.implicit = implicit
   end
 
   # yaml_parser_parse_node
@@ -251,16 +254,19 @@ class YAML::EventParser < YAML::Scanner
       @value_offset = token.input_offset
       @value_bytesize = token.input_bytesize
       plain = token.style.plain?
-      @event = Event.new(EventKind::SCALAR, token.start_mark, token.end_mark,
-        value: token.value, plain_implicit: plain, quoted_implicit: !plain,
-        scalar_style: token.style)
+      @event = Event.new(EventKind::SCALAR, token.start_mark, token.end_mark)
+      @event.value = token.value
+      @event.plain_implicit = plain
+      @event.quoted_implicit = !plain
+      @event.scalar_style = token.style
       return
     end
 
     if kind.alias?
       @state = @states.pop
       skip_token
-      @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
+      @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark)
+      @event.anchor = token.value
       return
     end
 
@@ -314,8 +320,8 @@ class YAML::EventParser < YAML::Scanner
     if indentless_sequence && token.kind.block_entry?
       end_mark = token.end_mark
       @state = State::INDENTLESS_SEQUENCE_ENTRY
-      @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
-        anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::BLOCK)
+      collection_start_event(EventKind::SEQUENCE_START, start_mark, end_mark, anchor, tag, implicit)
+      @event.sequence_style = SequenceStyle::BLOCK
       return
     end
 
@@ -333,38 +339,42 @@ class YAML::EventParser < YAML::Scanner
       skip_token
       @value_offset = token.input_offset
       @value_bytesize = token.input_bytesize
-      @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
-        anchor: anchor, tag: tag, value: token.value,
-        plain_implicit: plain_implicit, quoted_implicit: quoted_implicit,
-        scalar_style: token.style)
+      @event = Event.new(EventKind::SCALAR, start_mark, end_mark)
+      @event.anchor = anchor
+      @event.tag = tag
+      @event.value = token.value
+      @event.plain_implicit = plain_implicit
+      @event.quoted_implicit = quoted_implicit
+      @event.scalar_style = token.style
     when .flow_sequence_start?
       end_mark = token.end_mark
       @state = State::FLOW_SEQUENCE_FIRST_ENTRY
-      @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
-        anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::FLOW)
+      collection_start_event(EventKind::SEQUENCE_START, start_mark, end_mark, anchor, tag, implicit)
+      @event.sequence_style = SequenceStyle::FLOW
     when .flow_mapping_start?
       end_mark = token.end_mark
       @state = State::FLOW_MAPPING_FIRST_KEY
-      @event = Event.new(EventKind::MAPPING_START, start_mark, end_mark,
-        anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::FLOW)
+      collection_start_event(EventKind::MAPPING_START, start_mark, end_mark, anchor, tag, implicit)
+      @event.mapping_style = MappingStyle::FLOW
     else
       if block && token.kind.block_sequence_start?
         end_mark = token.end_mark
         @state = State::BLOCK_SEQUENCE_FIRST_ENTRY
-        @event = Event.new(EventKind::SEQUENCE_START, start_mark, end_mark,
-          anchor: anchor, tag: tag, implicit: implicit, sequence_style: SequenceStyle::BLOCK)
+        collection_start_event(EventKind::SEQUENCE_START, start_mark, end_mark, anchor, tag, implicit)
+        @event.sequence_style = SequenceStyle::BLOCK
       elsif block && token.kind.block_mapping_start?
         end_mark = token.end_mark
         @state = State::BLOCK_MAPPING_FIRST_KEY
-        @event = Event.new(EventKind::MAPPING_START, start_mark, end_mark,
-          anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::BLOCK)
+        collection_start_event(EventKind::MAPPING_START, start_mark, end_mark, anchor, tag, implicit)
+        @event.mapping_style = MappingStyle::BLOCK
       elsif anchor || tag
         @state = @states.pop
         @value_bytesize = 0
-        @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
-          anchor: anchor, tag: tag, value: "",
-          plain_implicit: implicit, quoted_implicit: false,
-          scalar_style: ScalarStyle::PLAIN)
+        @event = Event.new(EventKind::SCALAR, start_mark, end_mark)
+        @event.anchor = anchor
+        @event.tag = tag
+        @event.plain_implicit = implicit
+        @event.scalar_style = ScalarStyle::PLAIN
       else
         error("did not find expected node content", token.start_mark,
           block ? "while parsing a block node" : "while parsing a flow node", start_mark)
@@ -500,8 +510,9 @@ class YAML::EventParser < YAML::Scanner
       if token.kind.key?
         @state = State::FLOW_SEQUENCE_ENTRY_MAPPING_KEY
         skip_token
-        @event = Event.new(EventKind::MAPPING_START, token.start_mark, token.end_mark,
-          implicit: true, mapping_style: MappingStyle::FLOW)
+        @event = Event.new(EventKind::MAPPING_START, token.start_mark, token.end_mark)
+        @event.implicit = true
+        @event.mapping_style = MappingStyle::FLOW
         return
       elsif !token.kind.flow_sequence_end?
         @states << State::FLOW_SEQUENCE_ENTRY
@@ -615,11 +626,21 @@ class YAML::EventParser < YAML::Scanner
     process_empty_scalar(token.start_mark)
   end
 
+  # The SEQUENCE-START or MAPPING-START event of `#parse_node`, but for its
+  # style.
+  private def collection_start_event(kind : EventKind, start_mark : Mark, end_mark : Mark, anchor : String?, tag : String?, implicit : Bool) : Nil
+    @event = Event.new(kind, start_mark, end_mark)
+    @event.anchor = anchor
+    @event.tag = tag
+    @event.implicit = implicit
+  end
+
   # yaml_parser_process_empty_scalar
   private def process_empty_scalar(mark : Mark) : Nil
     @value_bytesize = 0
-    @event = Event.new(EventKind::SCALAR, mark, mark, value: "",
-      plain_implicit: true, quoted_implicit: false, scalar_style: ScalarStyle::PLAIN)
+    @event = Event.new(EventKind::SCALAR, mark, mark)
+    @event.plain_implicit = true
+    @event.scalar_style = ScalarStyle::PLAIN
   end
 
   # yaml_parser_process_directives

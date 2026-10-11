@@ -69,12 +69,16 @@ class YAML::Builder
   # If *implicit_start_indicator* is true, skips printing the document start
   # indicator (`---`) if this is the first document in the stream.
   def start_document(*, implicit_start_indicator : Bool = false)
-    emit "document_start", Event.new(EventKind::DOCUMENT_START, implicit: implicit_start_indicator)
+    event = Event.new(EventKind::DOCUMENT_START)
+    event.implicit = implicit_start_indicator
+    emit "document_start", event
   end
 
   # Ends a document.
   def end_document
-    emit "document_end", Event.new(EventKind::DOCUMENT_END, implicit: true)
+    event = Event.new(EventKind::DOCUMENT_END)
+    event.implicit = true
+    emit "document_end", event
   end
 
   # Starts a document, invokes the block, and then ends it.
@@ -90,14 +94,24 @@ class YAML::Builder
   def scalar(value, anchor : String? = nil, tag : String? = nil, style : YAML::ScalarStyle = YAML::ScalarStyle::ANY)
     string = value.to_s
     implicit = tag.nil?
-    emit "scalar", Event.new(EventKind::SCALAR, anchor: c_string(anchor), tag: c_string(tag), value: string,
-      plain_implicit: implicit, quoted_implicit: implicit, scalar_style: style)
+    event = Event.new(EventKind::SCALAR)
+    event.anchor = c_string(anchor)
+    event.tag = c_string(tag)
+    event.value = string
+    event.plain_implicit = implicit
+    event.quoted_implicit = implicit
+    event.scalar_style = style
+    emit "scalar", event
   end
 
   # Starts a sequence.
   def start_sequence(anchor : String? = nil, tag : String? = nil, style : YAML::SequenceStyle = YAML::SequenceStyle::ANY) : Nil
-    emit "sequence_start", Event.new(EventKind::SEQUENCE_START, anchor: c_string(anchor), tag: c_string(tag),
-      implicit: tag.nil?, sequence_style: style)
+    event = Event.new(EventKind::SEQUENCE_START)
+    event.anchor = c_string(anchor)
+    event.tag = c_string(tag)
+    event.implicit = tag.nil?
+    event.sequence_style = style
+    emit "sequence_start", event
     increase_nesting
   end
 
@@ -115,8 +129,12 @@ class YAML::Builder
 
   # Starts a mapping.
   def start_mapping(anchor : String? = nil, tag : String? = nil, style : YAML::MappingStyle = YAML::MappingStyle::ANY) : Nil
-    emit "mapping_start", Event.new(EventKind::MAPPING_START, anchor: c_string(anchor), tag: c_string(tag),
-      implicit: tag.nil?, mapping_style: style)
+    event = Event.new(EventKind::MAPPING_START)
+    event.anchor = c_string(anchor)
+    event.tag = c_string(tag)
+    event.implicit = tag.nil?
+    event.mapping_style = style
+    emit "mapping_start", event
     increase_nesting
   end
 
@@ -147,7 +165,9 @@ class YAML::Builder
   # yaml # => "---\nkey: *example\n"
   # ```
   def alias(anchor : String) : Nil
-    emit "alias", Event.new(EventKind::ALIAS, anchor: c_string(anchor))
+    event = Event.new(EventKind::ALIAS)
+    event.anchor = c_string(anchor)
+    emit "alias", event
   end
 
   # Emits the scalar `"<<"` followed by an alias to the given *anchor*.
