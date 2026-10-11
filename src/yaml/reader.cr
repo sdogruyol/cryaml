@@ -264,7 +264,8 @@ class YAML::Reader
     n
   end
 
-  # *count* times `SKIP` over ASCII characters (see `#ascii_run`).
+  # *count* times `SKIP` over ASCII characters: a run (see `#ascii_run`), or
+  # characters just checked, where SKIP would find a width of 1.
   @[AlwaysInline]
   def skip_ascii(count : Int32) : Nil
     @index &+= count
@@ -273,7 +274,7 @@ class YAML::Reader
     @pos &+= count
   end
 
-  # *count* times `READ` of ASCII characters (see `#ascii_run`).
+  # *count* times `READ` of ASCII characters (see `#skip_ascii`).
   @[AlwaysInline]
   def read_ascii(string : ByteBuffer, count : Int32) : Nil
     string.write(pointer, count)

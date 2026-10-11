@@ -438,9 +438,7 @@ class YAML::Scanner < YAML::Reader
     remove_simple_key
     @simple_key_allowed = false
     start_mark = mark
-    skip
-    skip
-    skip
+    skip_ascii(3)
     @tokens << Token.new(kind, start_mark, mark)
   end
 
@@ -450,7 +448,7 @@ class YAML::Scanner < YAML::Reader
     increase_flow_level
     @simple_key_allowed = true
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(kind, start_mark, mark)
   end
 
@@ -460,7 +458,7 @@ class YAML::Scanner < YAML::Reader
     decrease_flow_level
     @simple_key_allowed = false
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(kind, start_mark, mark)
   end
 
@@ -469,7 +467,7 @@ class YAML::Scanner < YAML::Reader
     remove_simple_key
     @simple_key_allowed = true
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(TokenKind::FLOW_ENTRY, start_mark, mark)
   end
 
@@ -484,7 +482,7 @@ class YAML::Scanner < YAML::Reader
     remove_simple_key
     @simple_key_allowed = true
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(TokenKind::BLOCK_ENTRY, start_mark, mark)
   end
 
@@ -499,7 +497,7 @@ class YAML::Scanner < YAML::Reader
     remove_simple_key
     @simple_key_allowed = @flow_level == 0
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(TokenKind::KEY, start_mark, mark)
   end
 
@@ -524,7 +522,7 @@ class YAML::Scanner < YAML::Reader
       @simple_key_allowed = @flow_level == 0
     end
     start_mark = mark
-    skip
+    skip_ascii(1)
     @tokens << Token.new(TokenKind::VALUE, start_mark, mark)
   end
 
@@ -579,7 +577,7 @@ class YAML::Scanner < YAML::Reader
         skip_ascii(n) if n > 0
       end
       while check?(' ') || ((@flow_level != 0 || !@simple_key_allowed) && check?('\t'))
-        skip
+        skip_ascii(1)
         cache(1)
       end
 
@@ -609,7 +607,7 @@ class YAML::Scanner < YAML::Reader
   # yaml_parser_scan_directive
   private def scan_directive : Token
     start_mark = mark
-    skip
+    skip_ascii(1)
 
     name = scan_directive_name(start_mark)
 
@@ -625,7 +623,7 @@ class YAML::Scanner < YAML::Reader
 
     cache(1)
     while blank?
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -656,7 +654,7 @@ class YAML::Scanner < YAML::Reader
 
     cache(1)
     while alpha?
-      read(string)
+      read_ascii(string, 1)
       cache(1)
     end
 
@@ -677,7 +675,7 @@ class YAML::Scanner < YAML::Reader
   private def scan_version_directive_value(start_mark : Mark) : {Int32, Int32}
     cache(1)
     while blank?
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -687,7 +685,7 @@ class YAML::Scanner < YAML::Reader
       scanner_error("while scanning a %YAML directive", start_mark,
         "did not find expected digit or '.' character")
     end
-    skip
+    skip_ascii(1)
 
     minor = scan_version_directive_number(start_mark)
     {major, minor}
@@ -708,7 +706,7 @@ class YAML::Scanner < YAML::Reader
           "found extremely long version number")
       end
       value = value * 10 + as_digit
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -724,7 +722,7 @@ class YAML::Scanner < YAML::Reader
   private def scan_tag_directive_value(start_mark : Mark) : {String, String}
     cache(1)
     while blank?
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -737,7 +735,7 @@ class YAML::Scanner < YAML::Reader
     end
 
     while blank?
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -759,11 +757,11 @@ class YAML::Scanner < YAML::Reader
     length = 0
 
     start_mark = mark
-    skip
+    skip_ascii(1)
 
     cache(1)
     while alpha?
-      read(string)
+      read_ascii(string, 1)
       cache(1)
       length += 1
     end
@@ -787,13 +785,12 @@ class YAML::Scanner < YAML::Reader
 
     if check?('<', 1)
       handle = ""
-      skip
-      skip
+      skip_ascii(2)
       suffix = scan_tag_uri(true, false, "", start_mark)
       unless check?('>')
         scanner_error("while scanning a tag", start_mark, "did not find the expected '>'")
       end
-      skip
+      skip_ascii(1)
     else
       handle = scan_tag_handle(false, start_mark)
       if handle.bytesize > 1 && handle.byte_at(0) == '!'.ord && handle.byte_at(handle.bytesize - 1) == '!'.ord
@@ -829,15 +826,15 @@ class YAML::Scanner < YAML::Reader
         start_mark, "did not find expected '!'")
     end
 
-    read(string)
+    read_ascii(string, 1)
     cache(1)
     while alpha?
-      read(string)
+      read_ascii(string, 1)
       cache(1)
     end
 
     if check?('!')
-      read(string)
+      read_ascii(string, 1)
     else
       if directive && !(string.size == 1 && string[0] == '!'.ord)
         scanner_error("while parsing a tag directive", start_mark, "did not find expected '!'")
@@ -870,7 +867,7 @@ class YAML::Scanner < YAML::Reader
       if c == '%'.ord
         scan_uri_escapes(directive, start_mark, string)
       else
-        read(string)
+        read_ascii(string, 1)
       end
       length += 1
       cache(1)
@@ -918,9 +915,7 @@ class YAML::Scanner < YAML::Reader
       end
 
       string << octet
-      skip
-      skip
-      skip
+      skip_ascii(3)
 
       width -= 1
       break if width == 0
@@ -943,12 +938,12 @@ class YAML::Scanner < YAML::Reader
     trailing_blank = false
 
     start_mark = mark
-    skip
+    skip_ascii(1)
 
     cache(1)
     if check?('+') || check?('-')
       chomping = check?('+') ? 1 : -1
-      skip
+      skip_ascii(1)
       cache(1)
       if digit?
         if check?('0')
@@ -956,7 +951,7 @@ class YAML::Scanner < YAML::Reader
             "found an indentation indicator equal to 0")
         end
         increment = as_digit
-        skip
+        skip_ascii(1)
       end
     elsif digit?
       if check?('0')
@@ -964,17 +959,17 @@ class YAML::Scanner < YAML::Reader
           "found an indentation indicator equal to 0")
       end
       increment = as_digit
-      skip
+      skip_ascii(1)
       cache(1)
       if check?('+') || check?('-')
         chomping = check?('+') ? 1 : -1
-        skip
+        skip_ascii(1)
       end
     end
 
     cache(1)
     while blank?
-      skip
+      skip_ascii(1)
       cache(1)
     end
 
@@ -1059,7 +1054,7 @@ class YAML::Scanner < YAML::Reader
       n = space_run(1, room)
       skip_ascii(n) if n > 0
       while (indent == 0 || @column < indent) && space?
-        skip
+        skip_ascii(1)
         cache(1)
       end
 
@@ -1146,7 +1141,7 @@ class YAML::Scanner < YAML::Reader
     quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
 
     start_mark = mark
-    skip
+    skip_ascii(1)
 
     # Fast path: a quoted scalar on one line without escapes is the input
     # between its quotes, which the loop below copies to `string` piece by
@@ -1158,7 +1153,7 @@ class YAML::Scanner < YAML::Reader
       if n &+ 4 <= @unread && byte(n) == quote && !(single && check?('\'', n &+ 1))
         start = input_offset
         skip_ascii(n)
-        skip
+        skip_ascii(1)
         style = single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED
         # The run is ASCII (and when empty, there's no string to make).
         return n == 0 ? Token.new(TokenKind::SCALAR, start_mark, mark, style: style) : input_scalar_token(start_mark, mark, start, n, style)
@@ -1205,13 +1200,12 @@ class YAML::Scanner < YAML::Reader
         c = byte
         if single && c == '\''.ord && check?('\'', 1)
           string << '\''
-          skip
-          skip
+          skip_ascii(2)
         elsif c == quote
           break
         elsif !single && c == '\\'.ord && break?(1)
           cache(3)
-          skip
+          skip_ascii(1)
           skip_line
           leading_blanks = true
           break
@@ -1231,9 +1225,9 @@ class YAML::Scanner < YAML::Reader
       while blank? || break?
         if blank?
           if leading_blanks
-            skip
+            skip_ascii(1)
           else
-            read(whitespaces)
+            read_ascii(whitespaces, 1)
           end
         else
           cache(2)
@@ -1269,7 +1263,7 @@ class YAML::Scanner < YAML::Reader
       end
     end
 
-    skip
+    skip_ascii(1)
     end_mark = mark
 
     Token.new(TokenKind::SCALAR, start_mark, end_mark, value: string.to_s,
@@ -1310,8 +1304,7 @@ class YAML::Scanner < YAML::Reader
         "found unknown escape character")
     end
 
-    skip
-    skip
+    skip_ascii(2)
 
     if code_length != 0
       cache(code_length)
@@ -1333,11 +1326,8 @@ class YAML::Scanner < YAML::Reader
 
     string.write_utf8(value)
 
-    k = 0
-    while k < code_length
-      skip
-      k += 1
-    end
+    # The hexadecimal digits, checked above.
+    skip_ascii(code_length)
   end
 
   # The run of characters at the current position that can extend a plain
@@ -1599,10 +1589,10 @@ class YAML::Scanner < YAML::Reader
             if n > 0
               skip_ascii(n)
             else
-              skip
+              skip_ascii(1)
             end
           else
-            read(whitespaces)
+            read_ascii(whitespaces, 1)
           end
         else
           cache(2)
