@@ -186,15 +186,19 @@ of 3:
 
 | Program | | stdlib (libyaml) | cryaml |
 | --- | --- | ---: | ---: |
-| serializable | LLVM work, release | 52.4G | 64.0G |
+| serializable | LLVM work, release | 52.4G | 62.0G |
 | serializable | LLVM work, debug | 9.8G | 11.6G |
-| serializable | release build | 10.3 s | 12.2 s |
-| serializable | debug build | 6.8 s | 8.0 s |
-| serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 919 KB |
-| parse | LLVM work, release | 41.7G | 48.8G |
-| parse | release build | 8.3 s | 9.7 s |
-| bench | LLVM work, release | 58.9G | 70.4G |
-| bench | release build | 11.0 s | 13.1 s |
+| serializable | release build | 9.7 s | 11.1 s |
+| serializable | debug build | 8.2 s | 9.0 s |
+| serializable | debug rebuild after an edit | 1.4 s | 1.5 s |
+| serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 895 KB |
+| parse | LLVM work, release | 41.7G | 48.4G |
+| parse | release build | 7.5 s | 9.1 s |
+| bench | LLVM work, release | 58.9G | 68.3G |
+| bench | release build | 10.2 s | 11.8 s |
+
+Wall and CPU times vary by several percent between runs on a busy machine;
+the LLVM counts don't (±0.02%).
 
 ## Reproduce
 
