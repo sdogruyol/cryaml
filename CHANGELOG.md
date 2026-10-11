@@ -1,11 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-11)
 
-- `shard.yml` declares `MIT AND Apache-2.0 WITH Swift-exception`: the files
-  adapted from Crystal's stdlib keep their license (see NOTICE.md).
-- The README says which stdlib version `src/yaml.cr`, `PullParser` and
-  `Builder` are adapted from, and how to check a newer compiler for drift.
+### Performance
+
 - Faster: `YAML.parse_all` 1.16x-3.81x the libyaml binding's speed (was
   1.25x-3.09x), the event walk 1.81x-6.02x, `to_yaml` 1.29x-1.87x (was
   0.99x-1.90x), on Linux x86_64/aarch64 and macOS arm64/x86_64. Every
@@ -17,6 +15,23 @@
 - Inlining tuned for compile time: release builds of a small program using
   YAML take about 1.7 s longer than with the binding (was about 2.3 s), and
   the stripped binary is about the binding's plus libyaml.so.
+
+### Changed
+
+- `shard.yml` declares `MIT AND Apache-2.0 WITH Swift-exception`: the files
+  adapted from Crystal's stdlib keep their license (see NOTICE.md).
+- The README says which stdlib version `src/yaml.cr`, `PullParser` and
+  `Builder` are adapted from, and how to check a newer compiler for drift.
+
+### Verification
+
+- Windows CI now runs the whole corpus (it had silently skipped it).
+- 47 new edge cases and builder scripts catch 16 planted engine bugs the
+  suite used to miss.
+- memcheck fails on any unexplained valgrind error; the live libyaml oracle
+  refuses to be cryaml; downstream CI proves the shim is used.
+- Both optimization rounds were reviewed independently and fuzzed (15.7
+  million cases on the final code, no findings).
 
 ## 0.1.1 (2026-10-10)
 
