@@ -168,7 +168,7 @@ class YAML::Emitter
     {% for field in %w(@tag_directives @anchor @tag @value) %}
       (head + offsetof(Event, {{field.id}})).as(Pointer(Pointer(Void))).value = Pointer(Void).null
     {% end %}
-    @events.shift_keeping_slot
+    @events.drop_first
   end
 
   # Whether `need_more_events?` may wait for more events after *kind*.

@@ -94,7 +94,9 @@ class YAML::EventParser < YAML::Scanner
       @event = Event.new
       raise error
     end
-    if stream_end_produced? || @state.end?
+    # (libyaml also checks `stream_end_produced`, which `SKIP_TOKEN` sets as
+    # the END state is entered.)
+    if @state.end?
       @event = Event.new
       return
     end

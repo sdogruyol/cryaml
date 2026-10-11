@@ -1,4 +1,15 @@
 # :nodoc:
+module YAML::Collections
+  # The `IndexError` of `Queue` and `Stack`, out of line: their bounds checks
+  # are inlined everywhere, and each would otherwise carry the allocation
+  # and raise of its own exception.
+  @[NoInline]
+  def self.index_error : NoReturn
+    raise IndexError.new
+  end
+end
+
+# :nodoc:
 #
 # The scanner's token queue and the emitter's event queue: libyaml's `QUEUE`
 # macros. The queued items are `@buffer[@head...@tail]`, and
@@ -33,7 +44,7 @@ struct YAML::Queue(T)
   # The item at the head of the queue.
   @[AlwaysInline]
   def first : T
-    raise IndexError.new if empty?
+    Collections.index_error if empty?
     @buffer[@head]
   end
 
@@ -41,14 +52,14 @@ struct YAML::Queue(T)
   # next modified.
   @[AlwaysInline]
   def first_pointer : Pointer(T)
-    raise IndexError.new if empty?
+    Collections.index_error if empty?
     @buffer + @head
   end
 
   # The item *index* positions after the head.
   @[AlwaysInline]
   def [](index : Int32) : T
-    raise IndexError.new unless 0 <= index < size
+    Collections.index_error unless 0 <= index < size
     @buffer[@head + index]
   end
 
@@ -64,7 +75,7 @@ struct YAML::Queue(T)
   # `extend_queue` rarely has items to move.
   @[AlwaysInline]
   def shift : T
-    raise IndexError.new if empty?
+    Collections.index_error if empty?
     item = @buffer[@head]
     (@buffer + @head).clear
     @head &+= 1
@@ -75,20 +86,19 @@ struct YAML::Queue(T)
     item
   end
 
-  # DEQUEUE without clearing the slot, like libyaml's `SKIP_TOKEN`: the
-  # slot keeps the item until it is reused (the queue starts over at the
-  # front whenever it empties). For the scanner, whose tokens hand their
-  # strings on to events anyway.
+  # DEQUEUE without clearing the slot or copying the item out, like
+  # libyaml's `SKIP_TOKEN`: the slot keeps the item until it is reused (the
+  # queue starts over at the front whenever it empties). For the scanner,
+  # whose tokens hand their strings on to events anyway, and the emitter,
+  # which clears the references of its events itself.
   @[AlwaysInline]
-  def shift_keeping_slot : T
-    raise IndexError.new if empty?
-    item = @buffer[@head]
+  def drop_first : Nil
+    Collections.index_error if empty?
     @head &+= 1
     if @head == @tail
       @head = 0
       @tail = 0
     end
-    item
   end
 
   # ENQUEUE
@@ -110,14 +120,14 @@ struct YAML::Queue(T)
   # ENQUEUE of the item built at `#tail_slot`.
   @[AlwaysInline]
   def push_tail_slot : Nil
-    raise IndexError.new if @tail == @capacity
+    Collections.index_error if @tail == @capacity
     @tail &+= 1
   end
 
   # QUEUE_INSERT: inserts *item* *index* positions after the head.
   @[AlwaysInline]
   def insert(index : Int32, item : T) : Nil
-    raise IndexError.new unless 0 <= index <= size
+    Collections.index_error unless 0 <= index <= size
     extend_queue if @tail == @capacity
     at = @head &+ index
     # Usually only an item or two follow the insertion point.
@@ -181,7 +191,7 @@ struct YAML::Stack(T)
   # POP
   @[AlwaysInline]
   def pop : T
-    raise IndexError.new if @size == 0
+    Collections.index_error if @size == 0
     @size &-= 1
     @buffer[@size]
   end

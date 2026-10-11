@@ -65,7 +65,6 @@ class YAML::Scanner < YAML::Reader
 
   @token_available = false
   @stream_start_produced = false
-  @stream_end_produced = false
   @simple_key_allowed = false
   # Whether an ASCII scalar taken as it is from a `String` input stays there
   # until its value is asked for (`Token.input_scalar`), instead of being
@@ -76,10 +75,6 @@ class YAML::Scanner < YAML::Reader
   # their work (`PullParser#value`); so the first value asked for
   # (`EventParser#make_value`) turns this off.
   @lazy_values = true
-
-  def stream_end_produced? : Bool
-    @stream_end_produced
-  end
 
   # libyaml `PEEK_TOKEN`.
   @[AlwaysInline]
@@ -124,19 +119,20 @@ class YAML::Scanner < YAML::Reader
     end
   end
 
-  # libyaml `SKIP_TOKEN`.
+  # libyaml `SKIP_TOKEN`. (It also sets `stream_end_produced` when it skips
+  # STREAM-END, which the parser only does as it enters its END state:
+  # `EventParser#parse` checks that state instead.)
   @[AlwaysInline]
   def skip_token : Nil
-    kind = @tokens.first_pointer.value.kind
-    if kind.block_end? && @block_end_run != 0 && @block_end_run_token == @tokens_parsed
+    if @block_end_run != 0 && @block_end_run_token == @tokens_parsed &&
+       @tokens.first_pointer.value.kind.block_end?
       # One of the BLOCK_END tokens the entry at the head stands for (see
       # `#unroll_indent`): the entry stays, and so does its availability.
       @block_end_run &-= 1
       return
     end
     @tokens_parsed &+= 1
-    @tokens.shift_keeping_slot
-    @stream_end_produced = kind.stream_end?
+    @tokens.drop_first
     # libyaml clears `token_available` here, so the next `PEEK_TOKEN` runs
     # `yaml_parser_fetch_more_tokens`. While tokens remain, that function
     # first checks for stale simple keys, which is a no-op: the position
