@@ -14,8 +14,9 @@ class YAML::Emitter
   # OUTPUT_BUFFER_SIZE in one step when that fills up (in one step: growing
   # gradually allocated more in total for large outputs, measured). Flushes
   # still happen only when the full 16 KiB would be used, so the IO sees the
-  # same writes.
-  private INITIAL_BUFFER_SIZE = 1024
+  # same writes. 1023 bytes rather than 1024: bdwgc adds a byte to every
+  # allocation, which would put 1024 in its 1344-byte size class.
+  private INITIAL_BUFFER_SIZE = 1023
 
   # yaml_emitter_state_t
   enum State

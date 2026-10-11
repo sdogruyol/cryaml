@@ -25,11 +25,11 @@ class YAML::Reader
   end
 
   # Raw input: a window into the input string, or a chunk buffer filled from
-  # an IO. `@raw_pos...@raw_last` are the bytes read but not yet decoded.
+  # an IO (which this pointer to its start keeps alive). `@raw_pos...@raw_last`
+  # are the bytes read but not yet decoded.
   @raw : Pointer(UInt8)
   @raw_pos = 0
   @raw_last = 0
-  @raw_buffer : Bytes?
   # Keeps the input string alive while `@raw` points into it.
   @input_string : String?
   # libyaml's `read_handler`, set for an IO input. A proc created where the
@@ -74,9 +74,7 @@ class YAML::Reader
       @string_size = input.bytesize
     in IO
       @buffer = Bytes.new(BUFFER_SIZE + PADDING)
-      raw_buffer = Bytes.new(RAW_BUFFER_SIZE + PADDING)
-      @raw_buffer = raw_buffer
-      @raw = raw_buffer.to_unsafe
+      @raw = Bytes.new(RAW_BUFFER_SIZE + PADDING).to_unsafe
       @read_handler = read_handler(input)
     end
   end

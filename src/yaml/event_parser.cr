@@ -11,8 +11,8 @@ require "./scanner"
 # direct call, and one allocation fewer per parser.
 class YAML::EventParser < YAML::Scanner
   # :nodoc:
-  # yaml_parser_state_t
-  enum State
+  # yaml_parser_state_t (one byte: the states stack grows with the nesting).
+  enum State : UInt8
     STREAM_START
     IMPLICIT_DOCUMENT_START
     DOCUMENT_START
@@ -41,17 +41,51 @@ class YAML::EventParser < YAML::Scanner
 
   DEFAULT_TAG_DIRECTIVES = { {"!", "!"}, {"!!", "tag:yaml.org,2002:"} }
 
-  @state = State::STREAM_START
+  # The start of every collection being parsed (libyaml's `marks` stack),
+  # for the context of error messages. They only show line and column, so
+  # the index isn't kept: 16 bytes per level instead of 24.
+  private record ContextMark, line : Int64, column : Int64
+
+  # Declared with its type, which puts it first among the parser's fields,
+  # right after the scanner's flags, where it fits in their padding.
+  @state : State = State::STREAM_START
   @states = Stack(State).new
-  @marks = Stack(Mark).new
+  @marks = Stack(ContextMark).new
   # The %TAG directives of the current document (see `#process_directives`).
   @tag_directives : Array({String, String})? = nil
   @error : ParseException? = nil
 
   # The current event. The parser builds each event right here, where
-  # `PullParser` reads it, rather than returning a 128-byte struct through
-  # every state function.
+  # `PullParser` reads it, rather than returning a 120-byte struct through
+  # every state function. A SCALAR's `value` is only there after
+  # `#make_value`.
   getter event = Event.new
+
+  # Where the current SCALAR event's value lies in the `String` input
+  # (`Token.input_scalar`) while the string hasn't been made:
+  # `@event.value` is "" until `#make_value` makes it. `@value_bytesize` is
+  # 0 for any other value of a SCALAR event (and stale after other events).
+  @value_offset = 0
+  @value_bytesize = 0
+
+  # Makes sure that `event.value` holds the value of a SCALAR event (one
+  # left in the input may still need to be made into a string).
+  @[AlwaysInline]
+  def make_value : Nil
+    make_input_value if @value_bytesize != 0 && @event.kind.scalar?
+  end
+
+  # Makes the string of a value left in the input and keeps it in the
+  # event. From now on the scanner makes them at once (see `@lazy_values`).
+  @[NoInline]
+  private def make_input_value : Nil
+    offset = @value_offset
+    bytesize = @value_bytesize
+    # ASCII, so it has as many characters as bytes.
+    @event.value = input_to_s(offset, offset &+ bytesize, bytesize)
+    @value_bytesize = 0
+    @lazy_values = false
+  end
 
   # yaml_parser_parse: replaces `#event` with the next event. As with
   # libyaml, a failure leaves an empty (NONE) event behind.
@@ -81,6 +115,18 @@ class YAML::EventParser < YAML::Scanner
   # yaml_parser_set_parser_error / yaml_parser_set_parser_error_context
   private def error(problem : String, problem_mark : Mark, context : String? = nil, context_mark : Mark = Mark.new) : NoReturn
     syntax_error(problem, problem_mark, context, context_mark)
+  end
+
+  # PUSH(parser->marks, mark)
+  @[AlwaysInline]
+  private def push_mark(mark : Mark) : Nil
+    @marks << ContextMark.new(mark.line, mark.column)
+  end
+
+  # POP(parser->marks) of an error's context mark (without its index).
+  private def pop_mark : Mark
+    mark = @marks.pop
+    Mark.new(0_i64, mark.line, mark.column)
   end
 
   # yaml_parser_state_machine
@@ -193,8 +239,23 @@ class YAML::EventParser < YAML::Scanner
   # yaml_parser_parse_node
   private def parse_node(block : Bool, indentless_sequence : Bool) : Nil
     token = peek
+    kind = token.kind
 
-    if token.kind.alias?
+    # Most nodes are scalars without properties: what the code below does
+    # for them, without keeping its variables.
+    if kind.scalar?
+      @state = @states.pop
+      skip_token
+      @value_offset = token.input_offset
+      @value_bytesize = token.input_bytesize
+      plain = token.style.plain?
+      @event = Event.new(EventKind::SCALAR, token.start_mark, token.end_mark,
+        value: token.value, plain_implicit: plain, quoted_implicit: !plain,
+        scalar_style: token.style)
+      return
+    end
+
+    if kind.alias?
       @state = @states.pop
       skip_token
       @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
@@ -268,6 +329,8 @@ class YAML::EventParser < YAML::Scanner
       end
       @state = @states.pop
       skip_token
+      @value_offset = token.input_offset
+      @value_bytesize = token.input_bytesize
       @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
         anchor: anchor, tag: tag, value: token.value,
         plain_implicit: plain_implicit, quoted_implicit: quoted_implicit,
@@ -295,6 +358,7 @@ class YAML::EventParser < YAML::Scanner
           anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::BLOCK)
       elsif anchor || tag
         @state = @states.pop
+        @value_bytesize = 0
         @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
           anchor: anchor, tag: tag, value: "",
           plain_implicit: implicit, quoted_implicit: false,
@@ -310,7 +374,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_block_sequence_entry(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -333,7 +397,7 @@ class YAML::EventParser < YAML::Scanner
       @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
     else
       error("did not find expected '-' indicator", token.start_mark,
-        "while parsing a block collection", @marks.pop)
+        "while parsing a block collection", pop_mark)
     end
   end
 
@@ -362,7 +426,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_block_mapping_key(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -386,7 +450,7 @@ class YAML::EventParser < YAML::Scanner
       @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
     else
       error("did not find expected key", token.start_mark,
-        "while parsing a block mapping", @marks.pop)
+        "while parsing a block mapping", pop_mark)
     end
   end
 
@@ -415,7 +479,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_flow_sequence_entry(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -427,7 +491,7 @@ class YAML::EventParser < YAML::Scanner
           token = peek
         else
           error("did not find expected ',' or ']'", token.start_mark,
-            "while parsing a flow sequence", @marks.pop)
+            "while parsing a flow sequence", pop_mark)
         end
       end
 
@@ -490,7 +554,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_flow_mapping_key(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -502,7 +566,7 @@ class YAML::EventParser < YAML::Scanner
           token = peek
         else
           error("did not find expected ',' or '}'", token.start_mark,
-            "while parsing a flow mapping", @marks.pop)
+            "while parsing a flow mapping", pop_mark)
         end
       end
 
@@ -551,6 +615,7 @@ class YAML::EventParser < YAML::Scanner
 
   # yaml_parser_process_empty_scalar
   private def process_empty_scalar(mark : Mark) : Nil
+    @value_bytesize = 0
     @event = Event.new(EventKind::SCALAR, mark, mark, value: "",
       plain_implicit: true, quoted_implicit: false, scalar_style: ScalarStyle::PLAIN)
   end

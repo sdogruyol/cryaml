@@ -23,15 +23,17 @@ end
 # * SEQUENCE_START: `anchor`, `tag`, `implicit`, `sequence_style`
 # * MAPPING_START: `anchor`, `tag`, `implicit`, `mapping_style`
 struct YAML::Event
+  # `implicit` is declared with the other flags, so that they share their
+  # padding: 120 bytes instead of 128.
   property kind : EventKind
   property start_mark : Mark
   property end_mark : Mark
   property version_directive : {Int32, Int32}?
   property tag_directives : Array({String, String})?
-  property? implicit : Bool
   property anchor : String?
   property tag : String?
   property value : String
+  property? implicit : Bool
   property? plain_implicit : Bool
   property? quoted_implicit : Bool
   property scalar_style : ScalarStyle
