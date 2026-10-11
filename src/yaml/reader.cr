@@ -364,7 +364,7 @@ class YAML::Reader
       update_raw_buffer if !first || @raw_pos == @raw_last
       first = false
 
-      decode_utf8(copy: false)
+      validate_utf8
 
       if @eof
         # The string's memory ends right after its last character, so the
@@ -459,31 +459,34 @@ class YAML::Reader
     ensure_buffer_capacity(raw_unread * 2)
 
     if @encoding.utf8?
-      decode_utf8
+      # UTF-8 decodes to the same bytes: they are validated where they are,
+      # then the validated ones are copied. (An encoding error is final, so
+      # those validated before it needn't be.)
+      raw_pos = @raw_pos
+      last = @last
+      validate_utf8
+      (@buffer.to_unsafe + last).copy_from(@raw + raw_pos, @raw_pos - raw_pos)
     else
       decode_utf16
     end
   end
 
-  # Validates the complete characters of the raw buffer and, if *copy*,
-  # copies them to `@buffer` (without, `@buffer` is the raw input itself).
-  private def decode_utf8(copy : Bool = true) : Nil
+  # Validates the complete characters of the raw buffer and moves past them
+  # in `@raw` and, by as many bytes, in `@buffer`, where the caller copies
+  # them (when not decoding in place, `@buffer` being the input itself).
+  private def validate_utf8 : Nil
     raw = @raw
-    out = @buffer.to_unsafe
     pos = @raw_pos
     last = @raw_last
-    out_pos = @last
     unread = @unread
 
     while pos < last
-      # Fast path: copy the printable ASCII characters (0x20..0x7E) among
+      # Fast path: skip the printable ASCII characters (0x20..0x7E) among
       # the next eight bytes, up to the first other byte, which is then
-      # decoded below.
+      # validated below.
       if last - pos >= 8
         mask = non_printable_ascii_mask(Chars.load_word(raw + pos))
         good = mask == 0 ? 8 : Chars.zero_bytes_before(mask)
-        (out + out_pos).copy_from(raw + pos, 8) if copy
-        out_pos &+= good
         pos &+= good
         unread &+= good
         next if mask == 0
@@ -494,11 +497,9 @@ class YAML::Reader
       # Fast path for printable ASCII, tab, LF and CR.
       if octet < 0x80
         unless (octet >= 0x20 && octet <= 0x7E) || octet == 0x0A || octet == 0x0D || octet == 0x09
-          sync_decode_state(pos, out_pos, unread)
+          sync_decode_state(pos, unread)
           reader_error("control characters are not allowed")
         end
-        out[out_pos] = octet if copy
-        out_pos += 1
         pos += 1
         unread += 1
         next
@@ -506,12 +507,12 @@ class YAML::Reader
 
       width = octet & 0xE0 == 0xC0 ? 2 : octet & 0xF0 == 0xE0 ? 3 : octet & 0xF8 == 0xF0 ? 4 : 0
       if width == 0
-        sync_decode_state(pos, out_pos, unread)
+        sync_decode_state(pos, unread)
         reader_error("invalid leading UTF-8 octet")
       end
 
       if width > last - pos
-        sync_decode_state(pos, out_pos, unread)
+        sync_decode_state(pos, unread)
         reader_error("incomplete UTF-8 octet sequence") if @eof
         # Incomplete character: wait for more raw input.
         return
@@ -522,7 +523,7 @@ class YAML::Reader
       while k < width
         trailing = raw[pos + k]
         if trailing & 0xC0 != 0x80
-          sync_decode_state(pos, out_pos, unread)
+          sync_decode_state(pos, unread)
           reader_error("invalid trailing UTF-8 octet")
         end
         value = (value << 6) + (trailing & 0x3F)
@@ -530,27 +531,25 @@ class YAML::Reader
       end
 
       unless (width == 2 && value >= 0x80) || (width == 3 && value >= 0x800) || (width == 4 && value >= 0x10000)
-        sync_decode_state(pos, out_pos, unread)
+        sync_decode_state(pos, unread)
         reader_error("invalid length of a UTF-8 sequence")
       end
 
       if (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF
-        sync_decode_state(pos, out_pos, unread)
+        sync_decode_state(pos, unread)
         reader_error("invalid Unicode character")
       end
 
       unless allowed?(value)
-        sync_decode_state(pos, out_pos, unread)
+        sync_decode_state(pos, unread)
         reader_error("control characters are not allowed")
       end
 
-      (out + out_pos).copy_from(raw + pos, width) if copy
-      out_pos += width
       pos += width
       unread += 1
     end
 
-    sync_decode_state(pos, out_pos, unread)
+    sync_decode_state(pos, unread)
   end
 
   # The bytes of *word* outside 0x20..0x7E (see the SWAR notes in `Chars`):
@@ -562,9 +561,9 @@ class YAML::Reader
   end
 
   @[AlwaysInline]
-  private def sync_decode_state(pos, out_pos, unread) : Nil
+  private def sync_decode_state(pos, unread) : Nil
+    @last += pos - @raw_pos
     @raw_pos = pos
-    @last = out_pos
     @unread = unread
   end
 
