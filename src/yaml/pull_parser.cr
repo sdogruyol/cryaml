@@ -78,6 +78,11 @@ class YAML::PullParser
   # Returns the scalar value, assuming the pull parser
   # is located at a scalar. Raises otherwise.
   def value : String
+    # Before the kind is checked: the string a value left in the input
+    # needs is made in a call that could change the event, as far as the
+    # compiler knows, so the event's fields are read after it, and calls
+    # that follow (`scalar_style`...) find them already read.
+    @parser.make_value
     expect_kind EventKind::SCALAR
 
     @parser.event.value

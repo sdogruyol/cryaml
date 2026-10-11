@@ -8,10 +8,12 @@ private def scan(input : String | IO) : String
     loop do
       token = scanner.peek_token
       io << token.kind << ' ' << mark(token.start_mark) << ' ' << mark(token.end_mark)
+      # A scalar's value may have been left in the input (`Token.input_scalar`):
+      # `Scanner#token_value` makes it.
       case token.kind
       when .alias?, .anchor?      then io << ' ' << token.value.inspect
       when .tag?, .tag_directive? then io << ' ' << token.handle.inspect << ' ' << token.value.inspect
-      when .scalar?               then io << ' ' << token.value.inspect << ' ' << token.style
+      when .scalar?               then io << ' ' << scanner.token_value(token).inspect << ' ' << token.style
       when .version_directive?    then io << ' ' << token.major << '.' << token.minor
       else # no payload
       end

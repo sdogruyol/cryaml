@@ -65,6 +65,16 @@ class YAML::Scanner < YAML::Reader
   @trailing_breaks = ByteBuffer.new
   @whitespaces = ByteBuffer.new
 
+  # Whether an ASCII scalar taken as it is from a `String` input stays there
+  # until its value is asked for (`Token.input_scalar`), instead of being
+  # made into a string at once. A program that walks events without
+  # reading their values then allocates nothing for them. One that reads
+  # values usually reads all of them (`YAML.parse`, `YAML::Nodes`), and for
+  # those making the string here costs less than making it in the middle of
+  # their work (`PullParser#value`); so the first value asked for
+  # (`EventParser#make_value`) turns this off.
+  @lazy_values = true
+
   def stream_end_produced? : Bool
     @stream_end_produced
   end
@@ -76,6 +86,28 @@ class YAML::Scanner < YAML::Reader
     # by `#fetch_tokens`.
     fetch_tokens unless @token_available
     @tokens.first
+  end
+
+  # The value of a SCALAR *token* of this scanner, including one left in
+  # the input (`Token.input_scalar`). Every time a new string.
+  def token_value(token : Token) : String
+    if (bytesize = token.input_bytesize) != 0
+      # ASCII, so it has as many characters as bytes.
+      input_to_s(token.input_offset, token.input_offset &+ bytesize, bytesize)
+    else
+      token.value
+    end
+  end
+
+  # A SCALAR token for the ASCII input of *bytesize* (> 0) bytes at *start*,
+  # left there while `@lazy_values`.
+  @[AlwaysInline]
+  private def input_scalar_token(start_mark : Mark, end_mark : Mark, start : Int32, bytesize : Int32, style : ScalarStyle) : Token
+    if @lazy_values
+      Token.input_scalar(start_mark, end_mark, start, bytesize, style)
+    else
+      Token.new(TokenKind::SCALAR, start_mark, end_mark, value: input_to_s(start, start &+ bytesize, bytesize), style: style)
+    end
   end
 
   private def fetch_tokens : Nil
@@ -585,7 +617,7 @@ class YAML::Scanner < YAML::Reader
 
     if name == "YAML"
       major, minor = scan_version_directive_value(start_mark)
-      token = Token.new(TokenKind::VERSION_DIRECTIVE, start_mark, mark, major: major, minor: minor)
+      token = Token.version_directive(start_mark, mark, major, minor)
     elsif name == "TAG"
       handle, prefix = scan_tag_directive_value(start_mark)
       token = Token.new(TokenKind::TAG_DIRECTIVE, start_mark, mark, value: prefix, handle: handle)
@@ -1128,8 +1160,9 @@ class YAML::Scanner < YAML::Reader
         start = input_offset
         skip_ascii(n)
         skip
-        return Token.new(TokenKind::SCALAR, start_mark, mark, value: input_to_s(start, start &+ n, n),
-          style: single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED)
+        style = single ? ScalarStyle::SINGLE_QUOTED : ScalarStyle::DOUBLE_QUOTED
+        # The run is ASCII (and when empty, there's no string to make).
+        return n == 0 ? Token.new(TokenKind::SCALAR, start_mark, mark, style: style) : input_scalar_token(start_mark, mark, start, n, style)
       end
     end
 
@@ -1448,8 +1481,7 @@ class YAML::Scanner < YAML::Reader
           ends = true
         end
         if ends
-          return Token.new(TokenKind::SCALAR, start_mark, end_mark,
-            value: input_to_s(verbatim_start, verbatim_end, n), style: ScalarStyle::PLAIN)
+          return input_scalar_token(start_mark, end_mark, verbatim_start, n, ScalarStyle::PLAIN)
         end
         resume = true
       end
@@ -1589,10 +1621,15 @@ class YAML::Scanner < YAML::Reader
       break if @flow_level == 0 && @column < indent
     end
 
-    # A verbatim value has as many characters as lie between the marks.
-    value = verbatim ? input_to_s(verbatim_start, verbatim_end, (end_mark.index &- start_mark.index).to_i32!) : string.to_s
-    token = Token.new(TokenKind::SCALAR, start_mark, end_mark, value: value,
-      style: ScalarStyle::PLAIN)
+    # A verbatim value has as many characters as lie between the marks; an
+    # ASCII one (as many bytes) can be left in the input.
+    size = (end_mark.index &- start_mark.index).to_i32!
+    token = if verbatim && @lazy_values && size == verbatim_end &- verbatim_start
+              Token.input_scalar(start_mark, end_mark, verbatim_start, size, ScalarStyle::PLAIN)
+            else
+              value = verbatim ? input_to_s(verbatim_start, verbatim_end, size) : string.to_s
+              Token.new(TokenKind::SCALAR, start_mark, end_mark, value: value, style: ScalarStyle::PLAIN)
+            end
 
     @simple_key_allowed = true if leading_blanks
 

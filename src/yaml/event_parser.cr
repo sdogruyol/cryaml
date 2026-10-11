@@ -50,8 +50,35 @@ class YAML::EventParser < YAML::Scanner
 
   # The current event. The parser builds each event right here, where
   # `PullParser` reads it, rather than returning a 128-byte struct through
-  # every state function.
+  # every state function. A SCALAR's `value` is only there after
+  # `#make_value`.
   getter event = Event.new
+
+  # Where the current SCALAR event's value lies in the `String` input
+  # (`Token.input_scalar`) while the string hasn't been made:
+  # `@event.value` is "" until `#make_value` makes it. `@value_bytesize` is
+  # 0 for any other value of a SCALAR event (and stale after other events).
+  @value_offset = 0
+  @value_bytesize = 0
+
+  # Makes sure that `event.value` holds the value of a SCALAR event (one
+  # left in the input may still need to be made into a string).
+  @[AlwaysInline]
+  def make_value : Nil
+    make_input_value if @value_bytesize != 0 && @event.kind.scalar?
+  end
+
+  # Makes the string of a value left in the input and keeps it in the
+  # event. From now on the scanner makes them at once (see `@lazy_values`).
+  @[NoInline]
+  private def make_input_value : Nil
+    offset = @value_offset
+    bytesize = @value_bytesize
+    # ASCII, so it has as many characters as bytes.
+    @event.value = input_to_s(offset, offset &+ bytesize, bytesize)
+    @value_bytesize = 0
+    @lazy_values = false
+  end
 
   # yaml_parser_parse: replaces `#event` with the next event. As with
   # libyaml, a failure leaves an empty (NONE) event behind.
@@ -200,6 +227,8 @@ class YAML::EventParser < YAML::Scanner
     if kind.scalar?
       @state = @states.pop
       skip_token
+      @value_offset = token.input_offset
+      @value_bytesize = token.input_bytesize
       plain = token.style.plain?
       @event = Event.new(EventKind::SCALAR, token.start_mark, token.end_mark,
         value: token.value, plain_implicit: plain, quoted_implicit: !plain,
@@ -281,6 +310,8 @@ class YAML::EventParser < YAML::Scanner
       end
       @state = @states.pop
       skip_token
+      @value_offset = token.input_offset
+      @value_bytesize = token.input_bytesize
       @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
         anchor: anchor, tag: tag, value: token.value,
         plain_implicit: plain_implicit, quoted_implicit: quoted_implicit,
@@ -308,6 +339,7 @@ class YAML::EventParser < YAML::Scanner
           anchor: anchor, tag: tag, implicit: implicit, mapping_style: MappingStyle::BLOCK)
       elsif anchor || tag
         @state = @states.pop
+        @value_bytesize = 0
         @event = Event.new(EventKind::SCALAR, start_mark, end_mark,
           anchor: anchor, tag: tag, value: "",
           plain_implicit: implicit, quoted_implicit: false,
@@ -564,6 +596,7 @@ class YAML::EventParser < YAML::Scanner
 
   # yaml_parser_process_empty_scalar
   private def process_empty_scalar(mark : Mark) : Nil
+    @value_bytesize = 0
     @event = Event.new(EventKind::SCALAR, mark, mark, value: "",
       plain_implicit: true, quoted_implicit: false, scalar_style: ScalarStyle::PLAIN)
   end
