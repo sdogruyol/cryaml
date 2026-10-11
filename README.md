@@ -104,9 +104,9 @@ quadratic in flow nesting depth; cryaml bounds it without changing the tokens.
 
 **Performance.** Faster than the libyaml binding on every workload measured
 on GitHub's Linux x86_64/aarch64 and macOS arm64/x86_64 runners:
-`YAML.parse_all` runs 1.16x-3.81x as fast as the stdlib's, the raw event walk
-1.81x-6.02x, `to_yaml` 1.29x-1.87x, with 17-71% of libyaml's instructions.
-Peak RSS is the same. Release builds of programs using YAML take about 1.7 s
+`YAML.parse_all` runs 1.75x-4.41x as fast as the stdlib's, the raw event walk
+2.41x-10.36x, `to_yaml` 1.33x-3.93x, with 15-71% of libyaml's instructions.
+Peak RSS is the same. Release builds of programs using YAML take about 1-1.3 s
 longer to compile. Full tables: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Installation
@@ -222,7 +222,7 @@ The same trick runs an unmodified project's test suite on cryaml.
 | System dependency | libyaml (version varies by platform) | none |
 | API | Crystal stdlib | identical (the same layers, loaded from your stdlib) |
 | Parse results, positions, errors, emitted text | libyaml 0.2.5 on most platforms | identical to libyaml 0.2.5 everywhere |
-| `YAML.parse_all` speed | 1x | 1.16x-3.81x |
+| `YAML.parse_all` speed | 1x | 1.75x-4.41x |
 | Peak RSS | baseline | about the same |
 | Malformed UTF-8 given to `Builder` | can crash the process | raises `YAML::Error` |
 | wasm32-wasi | needs libyaml built for WASI | works |

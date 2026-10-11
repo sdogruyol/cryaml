@@ -1,10 +1,11 @@
 # Performance
 
 cryaml is faster than the libyaml binding on every workload and operation
-measured, on all four platforms: `YAML.parse_all` 1.16x-3.81x, the bare event
-walk 1.81x-6.02x, `YAML::Nodes.parse_all` 1.65x-4.77x and `to_yaml`
-1.29x-1.87x. It runs fewer instructions on every row, between 17% and 71% of
-libyaml's.
+measured, on all four platforms: `YAML.parse_all` 1.75x-4.41x, the bare event
+walk 2.41x-10.36x, `YAML::Nodes.parse_all` 1.19x-5.62x and `to_yaml`
+1.33x-3.93x. It runs fewer instructions on every row, between 15% and 71% of
+libyaml's. The cost is compile time: release builds of a program that uses
+YAML take about 1-1.3 s longer (see the end of this page).
 
 ## Method
 
@@ -36,29 +37,32 @@ event (tokenizer and parser alone); `nodes` = `YAML::Nodes.parse_all`;
 
 | Workload | Operation | Linux x86_64 | Linux aarch64 | macOS arm64 | macOS x86_64 |
 | --- | --- | ---: | ---: | ---: | ---: |
-| small config (1 KB) | parse | 1.85x | 1.83x | 1.90x | 2.31x |
-| small config (1 KB) | pull | 3.07x | 2.69x | 4.24x | 3.81x |
-| small config (1 KB) | nodes | 2.08x | 1.90x | 2.14x | 2.26x |
-| small config (1 KB) | dump | 1.43x | 1.42x | 1.87x | 1.78x |
-| helm values (50 KB, real) | parse | 2.33x | 2.59x | 2.88x | 2.53x |
-| helm values (50 KB, real) | pull | 3.12x | 3.29x | 3.51x | 3.20x |
-| helm values (50 KB, real) | nodes | 2.66x | 2.82x | 2.33x | 2.63x |
-| helm values (50 KB, real) | dump | 1.67x | 1.59x | 1.54x | 1.29x |
-| manifests (100 KB) | parse | 1.81x | 1.81x | 1.69x | 1.16x |
-| manifests (100 KB) | pull | 2.74x | 2.37x | 1.96x | 2.05x |
-| manifests (100 KB) | nodes | 2.13x | 1.93x | 2.25x | 2.05x |
-| manifests (100 KB) | dump | 1.51x | 1.48x | 1.68x | 1.55x |
-| manifests (1 MB) | parse | 1.79x | 1.78x | 1.77x | 1.61x |
-| manifests (1 MB) | pull | 2.63x | 2.36x | 2.06x | 2.56x |
-| manifests (1 MB) | nodes | 2.13x | 1.87x | 2.08x | 2.07x |
-| manifests (1 MB) | dump | 1.54x | 1.42x | 1.69x | 1.30x |
-| deep nesting (300 levels) | parse | 3.36x | 3.74x | 3.81x | 3.10x |
-| deep nesting (300 levels) | pull | 5.83x | 6.02x | 6.01x | 4.56x |
-| deep nesting (300 levels) | nodes | 4.26x | 4.40x | 4.77x | 2.81x |
-| flow heavy (200 KB) | parse | 1.81x | 1.90x | 1.30x | 1.90x |
-| flow heavy (200 KB) | pull | 2.78x | 2.73x | 1.81x | 2.75x |
-| flow heavy (200 KB) | nodes | 2.29x | 2.17x | 1.65x | 2.24x |
-| flow heavy (200 KB) | dump | 1.46x | 1.38x | 1.63x | 1.59x |
+| small config (1 KB) | parse | 1.91x | 1.87x | 1.95x | 3.27x |
+| small config (1 KB) | pull | 3.54x | 3.29x | 10.36x | 5.46x |
+| small config (1 KB) | nodes | 2.18x | 2.01x | 2.99x | 5.62x |
+| small config (1 KB) | dump | 1.38x | 1.44x | 1.47x | 3.93x |
+| helm values (50 KB, real) | parse | 2.36x | 2.61x | 2.63x | 3.71x |
+| helm values (50 KB, real) | pull | 3.25x | 3.65x | 3.95x | 4.22x |
+| helm values (50 KB, real) | nodes | 2.69x | 2.86x | 2.92x | 4.51x |
+| helm values (50 KB, real) | dump | 1.59x | 1.56x | 2.30x | 2.60x |
+| manifests (100 KB) | parse | 1.82x | 1.81x | 2.42x | 2.73x |
+| manifests (100 KB) | pull | 3.18x | 2.89x | 3.62x | 2.80x |
+| manifests (100 KB) | nodes | 2.17x | 1.94x | 2.32x | 1.19x |
+| manifests (100 KB) | dump | 1.42x | 1.44x | 1.91x | 1.35x |
+| manifests (1 MB) | parse | 1.84x | 1.80x | 2.10x | 4.41x |
+| manifests (1 MB) | pull | 3.18x | 2.91x | 3.40x | 4.38x |
+| manifests (1 MB) | nodes | 2.13x | 1.95x | 2.37x | 2.38x |
+| manifests (1 MB) | dump | 1.33x | 1.41x | 1.60x | 1.81x |
+| deep nesting (300 levels) | parse | 3.37x | 3.73x | 4.54x | 3.22x |
+| deep nesting (300 levels) | pull | 5.75x | 6.81x | 7.44x | 4.96x |
+| deep nesting (300 levels) | nodes | 4.14x | 4.44x | 5.44x | 3.16x |
+| flow heavy (200 KB) | parse | 1.87x | 1.89x | 1.80x | 1.75x |
+| flow heavy (200 KB) | pull | 3.29x | 3.43x | 3.30x | 2.41x |
+| flow heavy (200 KB) | nodes | 2.28x | 2.14x | 2.44x | 1.98x |
+| flow heavy (200 KB) | dump | 1.40x | 1.33x | 1.41x | 1.38x |
+
+The macOS x86_64 runner is the noisiest (compare its two manifests rows);
+the Linux columns are the most stable.
 
 `parse` and `nodes` include the stdlib's own `YAML::Any`/`Nodes` building,
 which is the same code on both sides; the difference comes from what sits
@@ -68,29 +72,29 @@ under `PullParser` and `Builder`: the engine, or libyaml plus the binding.
 
 | Workload | Operation | libyaml | cryaml | cryaml/libyaml |
 | --- | --- | ---: | ---: | ---: |
-| small config (1 KB) | parse | 0.24M | 0.13M | 0.553 |
-| small config (1 KB) | pull | 0.17M | 0.08M | 0.463 |
-| small config (1 KB) | nodes | 0.21M | 0.11M | 0.528 |
-| small config (1 KB) | dump | 0.19M | 0.13M | 0.683 |
-| helm values (50 KB, real) | parse | 4.43M | 1.76M | 0.397 |
-| helm values (50 KB, real) | pull | 3.85M | 1.31M | 0.340 |
-| helm values (50 KB, real) | nodes | 4.11M | 1.50M | 0.365 |
-| helm values (50 KB, real) | dump | 1.25M | 0.73M | 0.585 |
-| manifests (100 KB) | parse | 28.37M | 15.77M | 0.556 |
-| manifests (100 KB) | pull | 19.32M | 8.42M | 0.436 |
-| manifests (100 KB) | nodes | 24.08M | 12.10M | 0.503 |
-| manifests (100 KB) | dump | 21.07M | 13.72M | 0.651 |
-| manifests (1 MB) | parse | 281.31M | 155.94M | 0.554 |
-| manifests (1 MB) | pull | 191.96M | 83.88M | 0.437 |
-| manifests (1 MB) | nodes | 238.83M | 119.70M | 0.501 |
-| manifests (1 MB) | dump | 209.91M | 136.36M | 0.650 |
-| deep nesting (300 levels) | parse | 82.00M | 20.06M | 0.245 |
-| deep nesting (300 levels) | pull | 73.53M | 12.79M | 0.174 |
-| deep nesting (300 levels) | nodes | 78.24M | 16.74M | 0.214 |
-| flow heavy (200 KB) | parse | 106.35M | 62.25M | 0.585 |
-| flow heavy (200 KB) | pull | 68.85M | 31.33M | 0.455 |
-| flow heavy (200 KB) | nodes | 86.74M | 44.36M | 0.511 |
-| flow heavy (200 KB) | dump | 70.76M | 50.02M | 0.707 |
+| small config (1 KB) | parse | 0.24M | 0.13M | 0.542 |
+| small config (1 KB) | pull | 0.17M | 0.07M | 0.400 |
+| small config (1 KB) | nodes | 0.21M | 0.11M | 0.510 |
+| small config (1 KB) | dump | 0.19M | 0.12M | 0.663 |
+| helm values (50 KB, real) | parse | 4.43M | 1.70M | 0.384 |
+| helm values (50 KB, real) | pull | 3.85M | 1.20M | 0.313 |
+| helm values (50 KB, real) | nodes | 4.11M | 1.44M | 0.351 |
+| helm values (50 KB, real) | dump | 1.25M | 0.73M | 0.580 |
+| manifests (100 KB) | parse | 28.37M | 15.36M | 0.541 |
+| manifests (100 KB) | pull | 19.32M | 7.24M | 0.375 |
+| manifests (100 KB) | nodes | 24.08M | 11.68M | 0.485 |
+| manifests (100 KB) | dump | 21.05M | 13.76M | 0.654 |
+| manifests (1 MB) | parse | 281.31M | 151.91M | 0.540 |
+| manifests (1 MB) | pull | 191.96M | 71.71M | 0.374 |
+| manifests (1 MB) | nodes | 238.83M | 115.55M | 0.484 |
+| manifests (1 MB) | dump | 209.91M | 136.83M | 0.652 |
+| deep nesting (300 levels) | parse | 82.00M | 19.15M | 0.233 |
+| deep nesting (300 levels) | pull | 73.53M | 11.37M | 0.155 |
+| deep nesting (300 levels) | nodes | 78.24M | 15.81M | 0.202 |
+| flow heavy (200 KB) | parse | 106.35M | 60.62M | 0.570 |
+| flow heavy (200 KB) | pull | 68.85M | 25.99M | 0.377 |
+| flow heavy (200 KB) | nodes | 86.74M | 42.68M | 0.492 |
+| flow heavy (200 KB) | dump | 70.87M | 50.14M | 0.707 |
 
 How the engine got there is in
 [ARCHITECTURE.md](ARCHITECTURE.md#performance-techniques). The plain port,
@@ -100,16 +104,19 @@ before any of it, ran up to 22% more instructions than libyaml (the
 ## Memory
 
 Peak RSS of a fresh process running `YAML.parse_all` five times is the same
-within GC timing (Linux x86_64, MB):
+within GC timing (Linux x86_64, MB). It is bimodal on both sides: the 1 MB
+manifests peak at about 31 or 49 MB depending on when the heap grows (five
+local runs each of the stdlib, cryaml 0.2.0 and this version all showed
+both).
 
 | Workload | stdlib (libyaml) | cryaml |
 | --- | ---: | ---: |
-| small config (1 KB) | 10.1 | 11.0 |
-| helm values (50 KB, real) | 11.6 | 11.1 |
-| manifests (100 KB) | 14.4 | 14.6 |
-| manifests (1 MB) | 30.2 | 30.1 |
-| deep nesting (300 levels) | 17.7 | 17.8 |
-| flow heavy (200 KB) | 23.0 | 23.0 |
+| small config (1 KB) | 11.3 | 10.9 |
+| helm values (50 KB, real) | 11.6 | 11.6 |
+| manifests (100 KB) | 14.4 | 14.2 |
+| manifests (1 MB) | 30.2 | 47.9 |
+| deep nesting (300 levels) | 20.0 | 18.6 |
+| flow heavy (200 KB) | 23.1 | 23.2 |
 
 Crystal heap allocated per operation (Linux x86_64, KB). libyaml's own state
 and buffers are malloc'ed outside the GC and not counted on the stdlib side;
@@ -117,45 +124,47 @@ cryaml's are ordinary GC memory:
 
 | Workload | Operation | stdlib | cryaml |
 | --- | --- | ---: | ---: |
-| small config (1 KB) | parse | 9.0 | 10.1 |
-| small config (1 KB) | pull | 0.9 | 4.0 |
-| small config (1 KB) | nodes | 10.2 | 11.4 |
-| small config (1 KB) | dump | 11.5 | 13.1 |
-| helm values (50 KB, real) | parse | 78.7 | 79.4 |
-| helm values (50 KB, real) | pull | 0.9 | 15.2 |
-| helm values (50 KB, real) | nodes | 70.7 | 71.4 |
-| helm values (50 KB, real) | dump | 73.1 | 90.8 |
-| manifests (100 KB) | parse | 1013.1 | 1014.4 |
-| manifests (100 KB) | pull | 10.6 | 224.8 |
-| manifests (100 KB) | nodes | 1051.4 | 1052.7 |
-| manifests (100 KB) | dump | 1318.2 | 1336.1 |
-| manifests (1 MB) | parse | 9979.5 | 9981.4 |
-| manifests (1 MB) | pull | 95.0 | 2207.6 |
-| manifests (1 MB) | nodes | 10391.2 | 10392.4 |
-| manifests (1 MB) | dump | 14460.3 | 14478.1 |
-| deep nesting (300 levels) | parse | 1850.9 | 1885.1 |
-| deep nesting (300 levels) | pull | 0.9 | 161.3 |
-| deep nesting (300 levels) | nodes | 1130.8 | 1165.0 |
-| flow heavy (200 KB) | parse | 3948.9 | 3959.0 |
-| flow heavy (200 KB) | pull | 0.9 | 857.1 |
-| flow heavy (200 KB) | nodes | 3929.1 | 3939.4 |
-| flow heavy (200 KB) | dump | 4937.2 | 4955.0 |
+| small config (1 KB) | parse | 9.0 | 9.8 |
+| small config (1 KB) | pull | 0.9 | 1.9 |
+| small config (1 KB) | nodes | 10.3 | 11.0 |
+| small config (1 KB) | dump | 11.5 | 12.8 |
+| helm values (50 KB, real) | parse | 78.7 | 79.2 |
+| helm values (50 KB, real) | pull | 0.9 | 1.5 |
+| helm values (50 KB, real) | nodes | 70.7 | 71.2 |
+| helm values (50 KB, real) | dump | 73.1 | 90.5 |
+| manifests (100 KB) | parse | 1013.0 | 1014.1 |
+| manifests (100 KB) | pull | 10.6 | 19.5 |
+| manifests (100 KB) | nodes | 1051.4 | 1052.4 |
+| manifests (100 KB) | dump | 1318.3 | 1335.8 |
+| manifests (1 MB) | parse | 9979.4 | 9980.6 |
+| manifests (1 MB) | pull | 95.1 | 174.5 |
+| manifests (1 MB) | nodes | 10391.3 | 10392.0 |
+| manifests (1 MB) | dump | 14460.2 | 14478.0 |
+| deep nesting (300 levels) | parse | 1850.9 | 1873.3 |
+| deep nesting (300 levels) | pull | 0.9 | 23.2 |
+| deep nesting (300 levels) | nodes | 1130.8 | 1153.2 |
+| flow heavy (200 KB) | parse | 3948.9 | 3958.9 |
+| flow heavy (200 KB) | pull | 0.9 | 11.0 |
+| flow heavy (200 KB) | nodes | 3929.3 | 3939.1 |
+| flow heavy (200 KB) | dump | 4937.3 | 4954.5 |
 
-- `parse` and `nodes` are within 0.2% on the large inputs: what's left is
+- `parse` and `nodes` are within 0.1% on the large inputs. What's left is
   about 1 KB of scanner and parser state per parser (libyaml mallocs its
-  own) and, for the deep document, the token queue that its runs of 300
-  BLOCK-END tokens grow. A `String` in UTF-8 is validated in place, so no
-  decode buffer is allocated for it.
-- `pull` walks the events without reading values. cryaml creates each
-  scalar's `String` while scanning; the binding creates it only when
-  `PullParser#value` is called. Making cryaml's strings lazy cut the walk
-  further but made `parse` and `nodes`, which read every value, 0.5-1.6%
-  slower, so values stay eager.
+  own) and, for the deep document, the stacks that grow to its 300 levels.
+  A `String` in UTF-8 is validated in place, so no decode buffer is
+  allocated for it.
+- `pull` walks the events without reading values. For `String` input, an
+  ASCII scalar that needs no folding or escapes stays in the input until
+  `PullParser#value` asks for it, like the binding, which builds every value
+  only then. Once a program reads a value, the scanner goes back to building
+  strings as it scans (building them later cost `parse` and `nodes`
+  0.5-1.3%), so programs that read values pay nothing for this. Folded or
+  escaped scalars and `IO` input are built as they are scanned.
 - `dump`: the emitter's output buffer is GC memory here and malloc'ed by
   libyaml. It starts at 1 KB and grows to libyaml's 16 KB only when that
   fills up (flushes still happen exactly where libyaml's would), so small
-  outputs allocate about 1.6 KB more than the binding and larger ones about
-  18 KB more.
+  outputs allocate about 1.3 KB more than the binding and larger ones about
+  17 KB more.
 
 ## Compile time and binary size
 
@@ -198,6 +207,14 @@ of 3:
 | bench | LLVM work, release | 58.9G | 67.4G |
 | bench | LLVM work, debug | 11.6G | 13.3G |
 | bench | release build | 9.3 s | 10.6 s |
+
+cryaml's extra release LLVM work for `serializable` was +11.6G in 0.2.0 and
+is +8.7G now (+16.6% over the binding), while parse, pull and nodes got
+faster still and dump stayed within 0.3%. What remains is mostly the engine
+itself: compiling all of libyaml's C with `gcc -O2` takes about 1.7 s of CPU
+here, a cost the binding's users pay once when libyaml is built. Removing
+every `@[AlwaysInline]` would save another 1.1G but make parsing 6-59%
+slower.
 
 Wall and CPU times vary by several percent between runs on a busy machine;
 the LLVM count of a given program doesn't (±0.02%). Any edit of the engine,
