@@ -93,8 +93,16 @@ module YAML::Chars
   @[AlwaysInline]
   def break?(p : Pointer(UInt8), o : Int32 = 0) : Bool
     c = p[o]
-    c == '\r'.ord || c == '\n'.ord ||
-      (c == 0xC2 && p[o &+ 1] == 0x85) ||
+    c == '\r'.ord || c == '\n'.ord || (c >= 0xC2 && unicode_break?(p, o))
+  end
+
+  # NEL (C2 85), LS (E2 80 A8) or PS (E2 80 A9): the rest of `#break?`, out
+  # of line. They are rare, and the checks would be copied wherever
+  # `#break?` is inlined.
+  @[NoInline]
+  def unicode_break?(p : Pointer(UInt8), o : Int32) : Bool
+    c = p[o]
+    (c == 0xC2 && p[o &+ 1] == 0x85) ||
       (c == 0xE2 && p[o &+ 1] == 0x80 && (p[o &+ 2] == 0xA8 || p[o &+ 2] == 0xA9))
   end
 
