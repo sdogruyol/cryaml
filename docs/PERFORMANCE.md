@@ -159,26 +159,48 @@ cryaml's are ordinary GC memory:
 
 ## Compile time and binary size
 
-A small program using `YAML::Serializable`, `YAML.parse` and `to_yaml`
-(Linux x86_64, cold cache, CPU user time of `crystal build`):
+The engine is Crystal code compiled into every program that uses it, where
+the binding links a prebuilt C library, so such a program takes longer to
+build. A program that only `require`s cryaml compiles exactly like one that
+only `require`s `yaml`: Crystal compiles only what is called.
 
-| | stdlib (libyaml) | cryaml |
-| --- | ---: | ---: |
-| release build | 7.3-7.5 s | 9.0-9.3 s |
-| debug build | 5.3 s | 5.9 s |
-| release binary, stripped | 798 KB + libyaml.so 133 KB | 925 KB |
-| release binary, with debug info | 1.74 MB | 2.10 MB |
+`scripts/compile_cost.sh` measures three programs on both sides:
+`serializable` (`bench/compile/serializable.cr`: `YAML::Serializable`,
+`YAML.parse` and `to_yaml`), `parse` (`bench/compile/parse.cr`: only
+`YAML.parse` of a `String`) and `bench` (`bench/bench.cr`). Almost all of
+the extra release time is LLVM optimizing the engine, so compile-time
+changes are judged by a deterministic count of that work: the instructions
+(cachegrind) that `opt -O3` and `llc -O3` execute on the program's
+unoptimized bitcode, which is what `--release` hands to LLVM
+(`crystal build --release --emit llvm-bc` writes the module before it is
+optimized). Debug builds run no IR pass (not even the always-inliner), only
+codegen, which `llc -O0` on the debug build's bitcode
+(`--single-module --emit llvm-bc`) counts. The script also reports the IR
+size (all functions and `YAML::` ones, which include the stdlib's YAML code
+both sides share), CPU times of cold release and debug builds and of a
+debug rebuild after an edit of the program, and binary sizes.
 
-Almost all of the extra release time is LLVM optimizing the engine, which is
-Crystal code in the program instead of a prebuilt C library; inlining was
-tuned to cut it without slowing any row above. A program that only
-`require`s cryaml compiles exactly like one that only `require`s `yaml`:
-Crystal compiles only what is called.
+Linux x86_64, Crystal 1.21.0 (LLVM 20), counts from LLVM 21's `opt` and
+`llc`, CPU time (user + sys) of `crystal build` with an empty cache, median
+of 3:
+
+| Program | | stdlib (libyaml) | cryaml |
+| --- | --- | ---: | ---: |
+| serializable | LLVM work, release | 52.4G | 64.0G |
+| serializable | LLVM work, debug | 9.8G | 11.6G |
+| serializable | release build | 10.3 s | 12.2 s |
+| serializable | debug build | 6.8 s | 8.0 s |
+| serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 919 KB |
+| parse | LLVM work, release | 41.7G | 48.8G |
+| parse | release build | 8.3 s | 9.7 s |
+| bench | LLVM work, release | 58.9G | 70.4G |
+| bench | release build | 11.0 s | 13.1 s |
 
 ## Reproduce
 
 ```sh
 scripts/instructions.sh           # callgrind table (needs valgrind and libyaml 0.2.5)
+scripts/compile_cost.sh           # compile cost tables (needs valgrind, LLVM tools and libyaml)
 crystal run bench/run.cr          # wall clock, both implementations, Markdown tables
 bin/bench-cryaml                  # one implementation, human-readable
 bin/bench-cryaml --rss "manifests (1 MB)" parse
