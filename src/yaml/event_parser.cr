@@ -46,7 +46,9 @@ class YAML::EventParser < YAML::Scanner
   # the index isn't kept: 16 bytes per level instead of 24.
   private record ContextMark, line : Int64, column : Int64
 
-  @state = State::STREAM_START
+  # Declared with its type, which puts it first among the parser's fields,
+  # right after the scanner's flags, where it fits in their padding.
+  @state : State = State::STREAM_START
   @states = Stack(State).new
   @marks = Stack(ContextMark).new
   # The %TAG directives of the current document (see `#process_directives`).
@@ -54,7 +56,7 @@ class YAML::EventParser < YAML::Scanner
   @error : ParseException? = nil
 
   # The current event. The parser builds each event right here, where
-  # `PullParser` reads it, rather than returning a 128-byte struct through
+  # `PullParser` reads it, rather than returning a 120-byte struct through
   # every state function. A SCALAR's `value` is only there after
   # `#make_value`.
   getter event = Event.new

@@ -16,26 +16,25 @@ class YAML::Scanner < YAML::Reader
     token_number : Int64,
     mark : Mark
 
+  # The fields are declared in an order that pairs up the 4-byte ones and
+  # groups the flags: the parser is 32 bytes smaller.
   @tokens = Queue(Token).new
-  @token_available = false
   # Token numbers and character indices count input, so they can't overflow
   # an `Int64` and are computed with wrapping arithmetic; a token number
   # minus `@tokens_parsed` is a position in the queue (an `Int32`).
   @tokens_parsed = 0_i64
   # A run of BLOCK_END tokens queued as one entry (see `#unroll_indent`).
-  @block_end_run = 0
   @block_end_run_token = 0_i64
-  @stream_start_produced = false
-  @stream_end_produced = false
+  @block_end_run = 0
   @indent = -1
   @indents = Stack(Int32).new
-  @simple_key_allowed = false
   # libyaml's `simple_keys` stack holds one key per flow level, the stream's
   # (level 0) at the bottom. Here the stream's key is a field of its own and
   # the stack only holds those of flow levels 1 to `@flow_level`, so block
   # documents never allocate it (see `#simple_key_at`).
   @simple_key = SimpleKey.new(false, false, 0_i64, Mark.new)
   @flow_simple_keys = Stack(SimpleKey).new
+  @flow_level = 0
   # Every simple key below this level is known not to be possible. libyaml
   # walks the whole stack on every token, which is quadratic in the flow
   # nesting depth; starting at the floor visits the same possible keys in
@@ -56,7 +55,6 @@ class YAML::Scanner < YAML::Reader
   # exactly when this is `@tokens_parsed`: libyaml's search of the stack in
   # `yaml_parser_fetch_more_tokens` is one comparison.
   @first_key_token = Int64::MAX
-  @flow_level = 0
   @scanner_error : ParseException? = nil
 
   # Scratch strings (libyaml allocates them per scan with STRING_INIT).
@@ -65,6 +63,10 @@ class YAML::Scanner < YAML::Reader
   @trailing_breaks = ByteBuffer.new
   @whitespaces = ByteBuffer.new
 
+  @token_available = false
+  @stream_start_produced = false
+  @stream_end_produced = false
+  @simple_key_allowed = false
   # Whether an ASCII scalar taken as it is from a `String` input stays there
   # until its value is asked for (`Token.input_scalar`), instead of being
   # made into a string at once. A program that walks events without

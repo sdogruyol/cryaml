@@ -37,6 +37,10 @@ class YAML::PullParser
   # reached.
   property alias_anchor_multiplier = 10
 
+  # Declared with its type before the other fields declared with theirs,
+  # which puts it first, next to the 4-byte type id: 8 bytes fewer.
+  @nesting : Int32 = 0
+
   # Created by the first anchor that needs them: most documents have none.
   @anchor_scope : Hash(Int32, {String, Int32})? = nil
   @anchor_costs : Hash(String, Int32)? = nil
@@ -44,7 +48,6 @@ class YAML::PullParser
   def initialize(@content : String | IO)
     @parser = EventParser.new(content)
 
-    @nesting = 0
     @anchors = 0
     @aliases = 0
 

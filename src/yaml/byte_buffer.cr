@@ -9,9 +9,15 @@
 # and `#join` reproduce exactly that behavior.
 class YAML::ByteBuffer
   getter size : Int32 = 0
+  # A pointer and a capacity rather than `Bytes` (whose read-only flag would
+  # take 8 more bytes): 24 bytes per buffer instead of 32.
+  @bytes : Pointer(UInt8)
+  @capacity : Int32
 
   def initialize(capacity : Int32 = 16)
-    @bytes = Bytes.new(Math.max(capacity, 16))
+    @capacity = Math.max(capacity, 16)
+    # Zeroed, like everything `#grow` allocates.
+    @bytes = Pointer(UInt8).malloc(@capacity)
     # Highest index written since the last `clear`; everything at or after it
     # is known to be zero.
     @dirty = 0
@@ -25,22 +31,22 @@ class YAML::ByteBuffer
   # `string.start[0]`).
   @[AlwaysInline]
   def first_byte : UInt8
-    @bytes.to_unsafe[0]
+    @bytes[0]
   end
 
   @[AlwaysInline]
   def [](index : Int32) : UInt8
-    @bytes.to_unsafe[index]
+    @bytes[index]
   end
 
   def to_unsafe : Pointer(UInt8)
-    @bytes.to_unsafe
+    @bytes
   end
 
   @[AlwaysInline]
   def <<(byte : UInt8) : self
     ensure_capacity(1)
-    @bytes.to_unsafe[@size] = byte
+    @bytes[@size] = byte
     @size += 1
     @dirty = @size if @size > @dirty
     self
@@ -53,7 +59,7 @@ class YAML::ByteBuffer
 
   def write(pointer : Pointer(UInt8), count : Int32) : self
     ensure_capacity(count)
-    (@bytes.to_unsafe + @size).copy_from(pointer, count)
+    (@bytes + @size).copy_from(pointer, count)
     @size += count
     @dirty = @size if @size > @dirty
     self
@@ -64,7 +70,7 @@ class YAML::ByteBuffer
   def write_utf8(value : UInt32) : self
     count = value <= 0x7F ? 1 : value <= 0x7FF ? 2 : value <= 0xFFFF ? 3 : 4
     ensure_capacity(count)
-    p = @bytes.to_unsafe + @size
+    p = @bytes + @size
     case count
     when 1
       p[0] = value.to_u8
@@ -89,11 +95,11 @@ class YAML::ByteBuffer
   # libyaml `CLEAR`: rewinds and zeroes the storage.
   def clear : Nil
     if @dirty > 16
-      @bytes.to_unsafe.clear(@dirty)
+      @bytes.clear(@dirty)
     elsif @dirty > 0
       # The storage is never smaller than 16 bytes; a constant size clears
       # without calling `memset`.
-      @bytes.to_unsafe.clear(16)
+      @bytes.clear(16)
     end
     @size = 0
     @dirty = 0
@@ -111,29 +117,30 @@ class YAML::ByteBuffer
   end
 
   def to_s : String
-    String.new(@bytes.to_unsafe, @size)
+    String.new(@bytes, @size)
   end
 
   def to_slice : Bytes
-    @bytes[0, @size]
+    Bytes.new(@bytes, @size)
   end
 
   @[AlwaysInline]
   private def ensure_capacity(extra : Int32) : Nil
     needed = @size.to_i64 + extra
-    grow(needed) if needed > @bytes.size
+    grow(needed) if needed > @capacity
   end
 
   # Doubles the storage until *needed* bytes fit, up to the largest `Bytes`
   # (`Int32::MAX`). Beyond that a scalar couldn't become a `String` anyway.
   private def grow(needed : Int64) : Nil
     raise ArgumentError.new("YAML scalar too large") if needed > Int32::MAX
-    capacity = Math.max(@bytes.size.to_i64 * 2, 16_i64)
+    capacity = Math.max(@capacity.to_i64 * 2, 16_i64)
     while capacity < needed
       capacity *= 2
     end
-    bytes = Bytes.new(Math.min(capacity, Int32::MAX.to_i64).to_i32)
-    bytes.to_unsafe.copy_from(@bytes.to_unsafe, @dirty)
+    @capacity = Math.min(capacity, Int32::MAX.to_i64).to_i32
+    bytes = Pointer(UInt8).malloc(@capacity)
+    bytes.copy_from(@bytes, @dirty)
     @bytes = bytes
   end
 end
