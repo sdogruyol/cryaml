@@ -323,7 +323,7 @@ class YAML::Emitter
       implicit = false if !first || @canonical
 
       if (version || has_directives) && @open_ended != 0
-        write_indicator("...", true, false, false)
+        write_rare_indicator("...", true, false, false)
         write_indent
       end
       @open_ended = 0
@@ -337,7 +337,7 @@ class YAML::Emitter
 
       unless implicit
         write_indent
-        write_indicator("---", true, false, false)
+        write_rare_indicator("---", true, false, false)
         write_indent if @canonical
       end
 
@@ -348,7 +348,7 @@ class YAML::Emitter
       # This can happen if a block scalar with trailing empty lines
       # is at the end of the stream.
       if @open_ended == 2
-        write_indicator("...", true, false, false)
+        write_rare_indicator("...", true, false, false)
         @open_ended = 0
         write_indent
       end
@@ -364,13 +364,13 @@ class YAML::Emitter
   @[NoInline]
   private def write_directives(version : {Int32, Int32}?, directives : Array({String, String})?) : Nil
     if version
-      write_indicator("%YAML", true, false, false)
-      write_indicator(version[1] == 1 ? "1.1" : "1.2", true, false, false)
+      write_rare_indicator("%YAML", true, false, false)
+      write_rare_indicator(version[1] == 1 ? "1.1" : "1.2", true, false, false)
       write_indent
     end
 
     directives.try &.each do |directive|
-      write_indicator("%TAG", true, false, false)
+      write_rare_indicator("%TAG", true, false, false)
       write_tag_handle(directive[0].to_unsafe, directive[0].bytesize)
       write_tag_content(directive[1].to_unsafe, directive[1].bytesize, true)
       write_indent
@@ -387,7 +387,7 @@ class YAML::Emitter
     if event.value.kind.document_end?
       write_indent
       if !event.value.implicit?
-        write_indicator("...", true, false, false)
+        write_rare_indicator("...", true, false, false)
         @open_ended = 0
         write_indent
       elsif @open_ended == 0
@@ -414,7 +414,7 @@ class YAML::Emitter
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
-        write_indicator(",", false, false, false)
+        write_rare_indicator(",", false, false, false)
         write_indent
       end
       write_indicator("]", false, false, false)
@@ -439,7 +439,7 @@ class YAML::Emitter
       @flow_level -= 1
       @indent = @indents.pop
       if @canonical && !first
-        write_indicator(",", false, false, false)
+        write_rare_indicator(",", false, false, false)
         write_indent
       end
       write_indicator("}", false, false, false)
@@ -453,7 +453,7 @@ class YAML::Emitter
     if !@canonical && check_simple_key?(event)
       node(false, false, true, true, State::FLOW_MAPPING_SIMPLE_VALUE)
     else
-      write_indicator("?", true, false, false)
+      write_rare_indicator("?", true, false, false)
       node(false, false, true, false, State::FLOW_MAPPING_VALUE)
     end
   end
@@ -464,7 +464,7 @@ class YAML::Emitter
       write_indicator(":", false, false, false)
     else
       write_indent if @canonical || @column > @best_width
-      write_indicator(":", true, false, false)
+      write_rare_indicator(":", true, false, false)
     end
     node(false, false, true, false, State::FLOW_MAPPING_KEY)
   end
@@ -499,7 +499,7 @@ class YAML::Emitter
     if check_simple_key?(event)
       node(false, false, true, true, State::BLOCK_MAPPING_SIMPLE_VALUE)
     else
-      write_indicator("?", true, false, true)
+      write_rare_indicator("?", true, false, true)
       node(false, false, true, false, State::BLOCK_MAPPING_VALUE)
     end
   end
@@ -510,7 +510,7 @@ class YAML::Emitter
       write_indicator(":", false, false, false)
     else
       write_indent
-      write_indicator(":", true, false, true)
+      write_rare_indicator(":", true, false, true)
     end
     node(false, false, true, false, State::BLOCK_MAPPING_KEY)
   end
@@ -743,7 +743,7 @@ class YAML::Emitter
   # The rest of yaml_emitter_process_anchor.
   @[NoInline]
   private def write_anchor_property : Nil
-    write_indicator(@anchor_alias ? "*" : "&", true, false, false)
+    write_rare_indicator(@anchor_alias ? "*" : "&", true, false, false)
     write_anchor(@anchor, @anchor_length)
   end
 
@@ -761,9 +761,9 @@ class YAML::Emitter
       write_tag_handle(@tag_handle, @tag_handle_length)
       write_tag_content(@tag_suffix, @tag_suffix_length, false) unless @tag_suffix.null?
     else
-      write_indicator("!<", true, false, false)
+      write_rare_indicator("!<", true, false, false)
       write_tag_content(@tag_suffix, @tag_suffix_length, false)
-      write_indicator(">", false, false, false)
+      write_rare_indicator(">", false, false, false)
     end
   end
 
@@ -1392,6 +1392,14 @@ class YAML::Emitter
     end
   end
 
+  # `#write_indicator` out of line, for the indicators of what is rare in
+  # most output (document markers, directives, tags, anchors, block scalars,
+  # complex keys, canonical output): only the common ones are inlined.
+  @[NoInline]
+  private def write_rare_indicator(indicator : String, need_whitespace : Bool, is_whitespace : Bool, is_indention : Bool) : Nil
+    write_indicator(indicator, need_whitespace, is_whitespace, is_indention)
+  end
+
   # yaml_emitter_write_anchor
   private def write_anchor(p : Pointer(UInt8), length : Int32) : Nil
     i = 0
@@ -1629,7 +1637,7 @@ class YAML::Emitter
   # yaml_emitter_write_block_scalar_hints
   private def write_block_scalar_hints(p : Pointer(UInt8), length : Int32) : Nil
     if Chars.space?(p, 0) || Chars.break?(p, 0)
-      write_indicator(INDENT_HINTS[@best_indent], false, false, false)
+      write_rare_indicator(INDENT_HINTS[@best_indent], false, false, false)
     end
 
     @open_ended = 0
@@ -1660,7 +1668,7 @@ class YAML::Emitter
       end
     end
 
-    write_indicator(chomp_hint, false, false, false) if chomp_hint
+    write_rare_indicator(chomp_hint, false, false, false) if chomp_hint
   end
 
   # yaml_emitter_write_literal_scalar (not inlined into process_scalar:
@@ -1669,7 +1677,7 @@ class YAML::Emitter
   private def write_literal_scalar(p : Pointer(UInt8), length : Int32) : Nil
     breaks = true
 
-    write_indicator("|", true, false, false)
+    write_rare_indicator("|", true, false, false)
     write_block_scalar_hints(p, length)
     put_break
     @indention = true
@@ -1699,7 +1707,7 @@ class YAML::Emitter
     breaks = true
     leading_spaces = true
 
-    write_indicator(">", true, false, false)
+    write_rare_indicator(">", true, false, false)
     write_block_scalar_hints(p, length)
     put_break
     @indention = true
