@@ -8,16 +8,22 @@
 # joined string can still report a stale first byte. `#first_byte`, `#clear`
 # and `#join` reproduce exactly that behavior.
 class YAML::ByteBuffer
+  # Capacities are one less than a power of two: bdwgc adds a byte to every
+  # allocation (so that a pointer just past its end still points into it),
+  # so these are what fill its size classes (15 bytes take 16, 16 would
+  # take 32).
+  INITIAL_CAPACITY = 15
+
   getter size : Int32 = 0
   # A pointer and a capacity rather than `Bytes` (whose read-only flag would
   # take 8 more bytes): 24 bytes per buffer instead of 32.
   @bytes : Pointer(UInt8)
   @capacity : Int32
 
-  def initialize(capacity : Int32 = 16)
-    @capacity = Math.max(capacity, 16)
+  def initialize
+    @capacity = INITIAL_CAPACITY
     # Zeroed, like everything `#grow` allocates.
-    @bytes = Pointer(UInt8).malloc(@capacity)
+    @bytes = Pointer(UInt8).malloc(INITIAL_CAPACITY)
     # Highest index written since the last `clear`; everything at or after it
     # is known to be zero.
     @dirty = 0
@@ -94,12 +100,12 @@ class YAML::ByteBuffer
 
   # libyaml `CLEAR`: rewinds and zeroes the storage.
   def clear : Nil
-    if @dirty > 16
+    if @dirty > INITIAL_CAPACITY
       @bytes.clear(@dirty)
     elsif @dirty > 0
-      # The storage is never smaller than 16 bytes; a constant size clears
-      # without calling `memset`.
-      @bytes.clear(16)
+      # The storage is never smaller than INITIAL_CAPACITY; a constant size
+      # clears without calling `memset`.
+      @bytes.clear(INITIAL_CAPACITY)
     end
     @size = 0
     @dirty = 0
@@ -130,15 +136,16 @@ class YAML::ByteBuffer
     grow(needed) if needed > @capacity
   end
 
-  # Doubles the storage until *needed* bytes fit, up to the largest `Bytes`
-  # (`Int32::MAX`). Beyond that a scalar couldn't become a `String` anyway.
+  # Doubles the storage (plus one, see INITIAL_CAPACITY) until *needed* bytes
+  # fit, up to the largest `Bytes` (`Int32::MAX`, itself 2^31 - 1). Beyond
+  # that a scalar couldn't become a `String` anyway.
   private def grow(needed : Int64) : Nil
     raise ArgumentError.new("YAML scalar too large") if needed > Int32::MAX
-    capacity = Math.max(@capacity.to_i64 * 2, 16_i64)
+    capacity = @capacity.to_i64 * 2 + 1
     while capacity < needed
-      capacity *= 2
+      capacity = capacity * 2 + 1
     end
-    @capacity = Math.min(capacity, Int32::MAX.to_i64).to_i32
+    @capacity = capacity.to_i32
     bytes = Pointer(UInt8).malloc(@capacity)
     bytes.copy_from(@bytes, @dirty)
     @bytes = bytes
