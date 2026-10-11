@@ -1300,7 +1300,9 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_write_indent
+  # yaml_emitter_write_indent. Not inlined: it runs once per line, and LLVM
+  # copied its fast path into each of its many callers.
+  @[NoInline]
   private def write_indent : Nil
     indent = @indent >= 0 ? @indent : 0
     column = @column
