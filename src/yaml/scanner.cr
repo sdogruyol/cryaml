@@ -745,7 +745,7 @@ class YAML::Scanner < YAML::Reader
       cache(1)
     end
 
-    prefix = scan_tag_uri(true, true, nil, start_mark)
+    prefix = scan_tag_uri(true, true, "", start_mark)
 
     cache(1)
     unless blankz?
@@ -793,7 +793,7 @@ class YAML::Scanner < YAML::Reader
       handle = ""
       skip
       skip
-      suffix = scan_tag_uri(true, false, nil, start_mark)
+      suffix = scan_tag_uri(true, false, "", start_mark)
       unless check?('>')
         scanner_error("while scanning a tag", start_mark, "did not find the expected '>'")
       end
@@ -801,7 +801,7 @@ class YAML::Scanner < YAML::Reader
     else
       handle = scan_tag_handle(false, start_mark)
       if handle.bytesize > 1 && handle.byte_at(0) == '!'.ord && handle.byte_at(handle.bytesize - 1) == '!'.ord
-        suffix = scan_tag_uri(false, false, nil, start_mark)
+        suffix = scan_tag_uri(false, false, "", start_mark)
       else
         suffix = scan_tag_uri(false, false, handle, start_mark)
         handle = "!"
@@ -851,13 +851,14 @@ class YAML::Scanner < YAML::Reader
     string.to_s
   end
 
-  # yaml_parser_scan_tag_uri
-  private def scan_tag_uri(uri_char : Bool, directive : Bool, head : String?, start_mark : Mark) : String
-    length = head ? head.bytesize : 0
+  # yaml_parser_scan_tag_uri (*head* is "" for none: a `nil` would compile
+  # the method a second time, for that argument type)
+  private def scan_tag_uri(uri_char : Bool, directive : Bool, head : String, start_mark : Mark) : String
+    length = head.bytesize
     string = @string
     string.clear
 
-    if head && length > 1
+    if length > 1
       string.write(head.to_unsafe + 1, length - 1)
     end
 
