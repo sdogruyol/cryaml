@@ -808,7 +808,9 @@ class YAML::Emitter
     error("tag prefix must not be empty") if prefix.empty?
   end
 
-  # yaml_emitter_analyze_anchor
+  # yaml_emitter_analyze_anchor. Not inlined: anchors are rare, and it would
+  # be copied into each of the three branches of `#analyze_event`.
+  @[NoInline]
   private def analyze_anchor(anchor : String, is_alias : Bool) : Nil
     p = anchor.to_unsafe
     size = anchor.bytesize
