@@ -256,29 +256,33 @@ class YAML::Emitter
     end
   end
 
-  # yaml_emitter_state_machine (inlined: a jump table)
+  # yaml_emitter_state_machine. The states that end by emitting a node
+  # (yaml_emitter_emit_node) return the state to come back to after it
+  # instead (see `#node`), so that `#emit_node` is compiled once, here,
+  # rather than into each of them.
   @[AlwaysInline]
   private def state_machine(event : Event*) : Nil
-    case @state
-    in .stream_start?               then emit_stream_start(event)
-    in .first_document_start?       then emit_document_start(event, true)
-    in .document_start?             then emit_document_start(event, false)
-    in .document_content?           then emit_document_content(event)
-    in .document_end?               then emit_document_end(event)
-    in .flow_sequence_first_item?   then emit_flow_sequence_item(event, true)
-    in .flow_sequence_item?         then emit_flow_sequence_item(event, false)
-    in .flow_mapping_first_key?     then emit_flow_mapping_key(event, true)
-    in .flow_mapping_key?           then emit_flow_mapping_key(event, false)
-    in .flow_mapping_simple_value?  then emit_flow_mapping_value(event, true)
-    in .flow_mapping_value?         then emit_flow_mapping_value(event, false)
-    in .block_sequence_first_item?  then emit_block_sequence_item(event, true)
-    in .block_sequence_item?        then emit_block_sequence_item(event, false)
-    in .block_mapping_first_key?    then emit_block_mapping_key(event, true)
-    in .block_mapping_key?          then emit_block_mapping_key(event, false)
-    in .block_mapping_simple_value? then emit_block_mapping_value(event, true)
-    in .block_mapping_value?        then emit_block_mapping_value(event, false)
-    in .end?                        then error("expected nothing after STREAM-END")
-    end
+    next_state = case @state
+                 in .stream_start?               then emit_stream_start(event)
+                 in .first_document_start?       then emit_document_start(event, true)
+                 in .document_start?             then emit_document_start(event, false)
+                 in .document_content?           then emit_document_content
+                 in .document_end?               then emit_document_end(event)
+                 in .flow_sequence_first_item?   then emit_flow_sequence_item(event, true)
+                 in .flow_sequence_item?         then emit_flow_sequence_item(event, false)
+                 in .flow_mapping_first_key?     then emit_flow_mapping_key(event, true)
+                 in .flow_mapping_key?           then emit_flow_mapping_key(event, false)
+                 in .flow_mapping_simple_value?  then emit_flow_mapping_value(true)
+                 in .flow_mapping_value?         then emit_flow_mapping_value(false)
+                 in .block_sequence_first_item?  then emit_block_sequence_item(event, true)
+                 in .block_sequence_item?        then emit_block_sequence_item(event, false)
+                 in .block_mapping_first_key?    then emit_block_mapping_key(event, true)
+                 in .block_mapping_key?          then emit_block_mapping_key(event, false)
+                 in .block_mapping_simple_value? then emit_block_mapping_value(true)
+                 in .block_mapping_value?        then emit_block_mapping_value(false)
+                 in .end?                        then error("expected nothing after STREAM-END")
+                 end
+    emit_node(event, next_state) if next_state
   end
 
   # yaml_emitter_emit_stream_start
@@ -371,8 +375,8 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_document_content
-  private def emit_document_content(event : Event*) : Nil
-    emit_node(event, true, false, false, false, State::DOCUMENT_END)
+  private def emit_document_content : State
+    node(true, false, false, false, State::DOCUMENT_END)
   end
 
   # yaml_emitter_emit_document_end
@@ -396,7 +400,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_flow_sequence_item
-  private def emit_flow_sequence_item(event : Event*, first : Bool) : Nil
+  private def emit_flow_sequence_item(event : Event*, first : Bool) : State?
     if first
       write_indicator("[", true, true, false)
       increase_indent(true, false)
@@ -417,11 +421,11 @@ class YAML::Emitter
 
     write_indicator(",", false, false, false) unless first
     write_indent if @canonical || @column > @best_width
-    emit_node(event, false, true, false, false, State::FLOW_SEQUENCE_ITEM)
+    node(false, true, false, false, State::FLOW_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_flow_mapping_key
-  private def emit_flow_mapping_key(event : Event*, first : Bool) : Nil
+  private def emit_flow_mapping_key(event : Event*, first : Bool) : State?
     if first
       write_indicator("{", true, true, false)
       increase_indent(true, false)
@@ -444,26 +448,26 @@ class YAML::Emitter
     write_indent if @canonical || @column > @best_width
 
     if !@canonical && check_simple_key?(event)
-      emit_node(event, false, false, true, true, State::FLOW_MAPPING_SIMPLE_VALUE)
+      node(false, false, true, true, State::FLOW_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, false)
-      emit_node(event, false, false, true, false, State::FLOW_MAPPING_VALUE)
+      node(false, false, true, false, State::FLOW_MAPPING_VALUE)
     end
   end
 
   # yaml_emitter_emit_flow_mapping_value
-  private def emit_flow_mapping_value(event : Event*, simple : Bool) : Nil
+  private def emit_flow_mapping_value(simple : Bool) : State
     if simple
       write_indicator(":", false, false, false)
     else
       write_indent if @canonical || @column > @best_width
       write_indicator(":", true, false, false)
     end
-    emit_node(event, false, false, true, false, State::FLOW_MAPPING_KEY)
+    node(false, false, true, false, State::FLOW_MAPPING_KEY)
   end
 
   # yaml_emitter_emit_block_sequence_item
-  private def emit_block_sequence_item(event : Event*, first : Bool) : Nil
+  private def emit_block_sequence_item(event : Event*, first : Bool) : State?
     increase_indent(false, @mapping_context && !@indention) if first
 
     if event.value.kind.sequence_end?
@@ -474,11 +478,11 @@ class YAML::Emitter
 
     write_indent
     write_indicator("-", true, false, true)
-    emit_node(event, false, true, false, false, State::BLOCK_SEQUENCE_ITEM)
+    node(false, true, false, false, State::BLOCK_SEQUENCE_ITEM)
   end
 
   # yaml_emitter_emit_block_mapping_key
-  private def emit_block_mapping_key(event : Event*, first : Bool) : Nil
+  private def emit_block_mapping_key(event : Event*, first : Bool) : State?
     increase_indent(false, false) if first
 
     if event.value.kind.mapping_end?
@@ -490,35 +494,42 @@ class YAML::Emitter
     write_indent
 
     if check_simple_key?(event)
-      emit_node(event, false, false, true, true, State::BLOCK_MAPPING_SIMPLE_VALUE)
+      node(false, false, true, true, State::BLOCK_MAPPING_SIMPLE_VALUE)
     else
       write_indicator("?", true, false, true)
-      emit_node(event, false, false, true, false, State::BLOCK_MAPPING_VALUE)
+      node(false, false, true, false, State::BLOCK_MAPPING_VALUE)
     end
   end
 
   # yaml_emitter_emit_block_mapping_value
-  private def emit_block_mapping_value(event : Event*, simple : Bool) : Nil
+  private def emit_block_mapping_value(simple : Bool) : State
     if simple
       write_indicator(":", false, false, false)
     else
       write_indent
       write_indicator(":", true, false, true)
     end
-    emit_node(event, false, false, true, false, State::BLOCK_MAPPING_KEY)
+    node(false, false, true, false, State::BLOCK_MAPPING_KEY)
   end
 
-  # yaml_emitter_emit_node, with the state to return to (pushed by the
-  # caller in libyaml). A scalar or an alias sets it at once when done,
-  # instead of pushing it for its own pop, and pushes it only if it fails,
-  # which leaves the stack as libyaml's.
+  # The start of yaml_emitter_emit_node: sets the context of the node a
+  # state ends with and returns the state to come back to after it, for
+  # `#state_machine` to emit the node.
   @[AlwaysInline]
-  private def emit_node(event : Event*, root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool, next_state : State) : Nil
+  private def node(root : Bool, sequence : Bool, mapping : Bool, simple_key : Bool, next_state : State) : State
     @root_context = root
     @sequence_context = sequence
     @mapping_context = mapping
     @simple_key_context = simple_key
+    next_state
+  end
 
+  # The rest of yaml_emitter_emit_node, with the state to return to (pushed
+  # by the caller in libyaml). A scalar or an alias sets it at once when
+  # done, instead of pushing it for its own pop, and pushes it only if it
+  # fails, which leaves the stack as libyaml's.
+  @[AlwaysInline]
+  private def emit_node(event : Event*, next_state : State) : Nil
     case event.value.kind
     when .alias?
       emit_alias(next_state)
