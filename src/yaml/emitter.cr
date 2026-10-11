@@ -68,6 +68,9 @@ class YAML::Emitter
   @sequence_context = false
   @mapping_context = false
   @simple_key_context = false
+  # Advanced with wrapping arithmetic (`&+=`) by every PUT and WRITE, like
+  # libyaml's `int` column: no overflow check is copied into each of them
+  # (a line would need more than 2^31 characters).
   @column = 0
   @whitespace = false
   @indention = false
@@ -598,7 +601,7 @@ class YAML::Emitter
     put(' '.ord.to_u8) unless @whitespace
     copy_bytes(@buffer + @pos, @scalar_value, length)
     @pos &+= length # below @write_limit
-    @column += length
+    @column &+= length
     @whitespace = false
     @indention = false
     true
@@ -1213,7 +1216,7 @@ class YAML::Emitter
     flush_if_needed
     @buffer[@pos] = value
     @pos &+= 1
-    @column += 1
+    @column &+= 1
   end
 
   # PUT_BREAK (line break is always LN)
@@ -1256,7 +1259,7 @@ class YAML::Emitter
   private def write_multibyte(p : Pointer(UInt8), i : Int32) : Int32
     flush_if_needed
     i = copy(p, i)
-    @column += 1
+    @column &+= 1
     i
   end
 
@@ -1282,7 +1285,7 @@ class YAML::Emitter
       n &+= 1
     end
     @pos &+= n
-    @column += n
+    @column &+= n
     i &+ n
   end
 
@@ -1341,7 +1344,7 @@ class YAML::Emitter
       if n > 0
         (@buffer + @pos).fill(n, ' '.ord.to_u8)
         @pos += n
-        @column += n
+        @column &+= n
         next
       end
       put(' '.ord.to_u8)
@@ -1352,18 +1355,41 @@ class YAML::Emitter
 
   # yaml_emitter_write_indicator (inlined: indicators are short constants).
   # Every indicator is ASCII, so its WRITEs are PUTs (same FLUSH points).
+  # When none of those PUTs (the space, then the indicator's characters)
+  # would flush, they are stored at once; otherwise they are made one by
+  # one, out of line.
   @[AlwaysInline]
   private def write_indicator(indicator : String, need_whitespace : Bool, is_whitespace : Bool, is_indention : Bool) : Nil
-    put(' '.ord.to_u8) if need_whitespace && !@whitespace
-    p = indicator.to_unsafe
+    space = need_whitespace && !@whitespace
     size = indicator.bytesize
-    i = 0
-    while i != size
-      put(p[i])
-      i &+= 1
+    # At most `size + 1` PUTs: the last one, at `@pos + size`, needs no
+    # FLUSH when that is below `@write_limit`, nor do those before it.
+    if @pos &+ size < @write_limit
+      if space
+        @buffer[@pos] = ' '.ord.to_u8
+        @pos &+= 1
+        @column &+= 1
+      end
+      (@buffer + @pos).copy_from(indicator.to_unsafe, size)
+      @pos &+= size
+      @column &+= size
+    else
+      put_indicator(indicator, space)
     end
     @whitespace = is_whitespace
     @indention = @indention && is_indention
+  end
+
+  # The PUTs of `#write_indicator` when one of them may flush.
+  @[NoInline]
+  private def put_indicator(indicator : String, space : Bool) : Nil
+    put(' '.ord.to_u8) if space
+    p = indicator.to_unsafe
+    i = 0
+    while i != indicator.bytesize
+      put(p[i])
+      i &+= 1
+    end
   end
 
   # yaml_emitter_write_anchor
