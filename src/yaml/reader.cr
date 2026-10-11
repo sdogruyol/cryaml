@@ -59,6 +59,10 @@ class YAML::Reader
   @verbatim_input = false
   @buffer_offset = 0
 
+  # The error that ended reading or scanning (see `#reader_error`,
+  # `Scanner#scanner_error`).
+  @scanner_error : ParseException? = nil
+
   # Current position (libyaml `parser->mark`).
   @index = 0_i64
   @line = 0_i64
@@ -95,8 +99,13 @@ class YAML::Reader
   # Raises a `ParseException` the way `YAML::PullParser` reports libyaml
   # errors: 1-based problem position, plus an optional context.
   def syntax_error(problem : String, problem_mark : Mark, context : String? = nil, context_mark : Mark = Mark.new) : NoReturn
+    raise parse_exception(problem, problem_mark, context, context_mark)
+  end
+
+  # The `ParseException` of `#syntax_error`.
+  def parse_exception(problem : String, problem_mark : Mark, context : String?, context_mark : Mark) : ParseException
     context_info = context ? {context, context_mark.line + 1, context_mark.column + 1} : nil
-    raise ParseException.new(problem, problem_mark.line + 1, problem_mark.column + 1, context_info)
+    ParseException.new(problem, problem_mark.line + 1, problem_mark.column + 1, context_info)
   end
 
   # libyaml `CACHE(parser, length)`: makes sure at least *length* characters
@@ -386,7 +395,7 @@ class YAML::Reader
   # Reader errors are positioned at line 1, column 1, as libyaml's binding
   # reports them. The scanner keeps raising the stored error afterwards.
   private def reader_error(problem : String) : NoReturn
-    raise ParseException.new(problem, 1, 1)
+    raise @scanner_error = ParseException.new(problem, 1, 1)
   end
 
   private def determine_encoding : Nil

@@ -55,7 +55,6 @@ class YAML::Scanner < YAML::Reader
   # exactly when this is `@tokens_parsed`: libyaml's search of the stack in
   # `yaml_parser_fetch_more_tokens` is one comparison.
   @first_key_token = Int64::MAX
-  @scanner_error : ParseException? = nil
 
   # Scratch strings (libyaml allocates them per scan with STRING_INIT).
   @string = ByteBuffer.new
@@ -80,8 +79,8 @@ class YAML::Scanner < YAML::Reader
   @[AlwaysInline]
   def peek_token : Token
     # A stored error leaves `@token_available` false, so it is raised again
-    # by `#fetch_tokens`.
-    fetch_tokens unless @token_available
+    # by `#fetch_more_tokens`.
+    fetch_more_tokens unless @token_available
     @tokens.first
   end
 
@@ -104,18 +103,6 @@ class YAML::Scanner < YAML::Reader
       Token.input_scalar(start_mark, end_mark, start, bytesize, style)
     else
       Token.scalar(start_mark, end_mark, input_to_s(start, start &+ bytesize, bytesize), style)
-    end
-  end
-
-  private def fetch_tokens : Nil
-    if error = @scanner_error
-      raise error
-    end
-    begin
-      fetch_more_tokens
-    rescue ex : ParseException
-      @scanner_error = ex
-      raise ex
     end
   end
 
@@ -142,9 +129,10 @@ class YAML::Scanner < YAML::Reader
     @token_available = !@tokens.empty? && !simple_key_pending?
   end
 
-  # yaml_parser_set_scanner_error
+  # yaml_parser_set_scanner_error. The error is kept, and raised again by
+  # every later `#fetch_more_tokens`.
   private def scanner_error(context : String?, context_mark : Mark, problem : String) : NoReturn
-    syntax_error(problem, mark, context, context_mark)
+    raise @scanner_error = parse_exception(problem, mark, context, context_mark)
   end
 
   # Whether the next token is a possible simple key, so that more tokens are
@@ -154,8 +142,14 @@ class YAML::Scanner < YAML::Reader
     @first_key_token == @tokens_parsed
   end
 
-  # yaml_parser_fetch_more_tokens
+  # yaml_parser_fetch_more_tokens. A scanner or reader error is final: it
+  # is raised again (`#scanner_error` and `Reader#reader_error` keep it).
+  # Checked here rather than in `#peek_token`, which is inlined into every
+  # caller.
   private def fetch_more_tokens : Nil
+    if error = @scanner_error
+      raise error
+    end
     while true
       need_more_tokens = false
       if @tokens.empty?
