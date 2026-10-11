@@ -11,8 +11,8 @@ require "./scanner"
 # direct call, and one allocation fewer per parser.
 class YAML::EventParser < YAML::Scanner
   # :nodoc:
-  # yaml_parser_state_t
-  enum State
+  # yaml_parser_state_t (one byte: the states stack grows with the nesting).
+  enum State : UInt8
     STREAM_START
     IMPLICIT_DOCUMENT_START
     DOCUMENT_START
@@ -41,9 +41,14 @@ class YAML::EventParser < YAML::Scanner
 
   DEFAULT_TAG_DIRECTIVES = { {"!", "!"}, {"!!", "tag:yaml.org,2002:"} }
 
+  # The start of every collection being parsed (libyaml's `marks` stack),
+  # for the context of error messages. They only show line and column, so
+  # the index isn't kept: 16 bytes per level instead of 24.
+  private record ContextMark, line : Int64, column : Int64
+
   @state = State::STREAM_START
   @states = Stack(State).new
-  @marks = Stack(Mark).new
+  @marks = Stack(ContextMark).new
   # The %TAG directives of the current document (see `#process_directives`).
   @tag_directives : Array({String, String})? = nil
   @error : ParseException? = nil
@@ -108,6 +113,18 @@ class YAML::EventParser < YAML::Scanner
   # yaml_parser_set_parser_error / yaml_parser_set_parser_error_context
   private def error(problem : String, problem_mark : Mark, context : String? = nil, context_mark : Mark = Mark.new) : NoReturn
     syntax_error(problem, problem_mark, context, context_mark)
+  end
+
+  # PUSH(parser->marks, mark)
+  @[AlwaysInline]
+  private def push_mark(mark : Mark) : Nil
+    @marks << ContextMark.new(mark.line, mark.column)
+  end
+
+  # POP(parser->marks) of an error's context mark (without its index).
+  private def pop_mark : Mark
+    mark = @marks.pop
+    Mark.new(0_i64, mark.line, mark.column)
   end
 
   # yaml_parser_state_machine
@@ -355,7 +372,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_block_sequence_entry(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -378,7 +395,7 @@ class YAML::EventParser < YAML::Scanner
       @event = Event.new(EventKind::SEQUENCE_END, token.start_mark, token.end_mark)
     else
       error("did not find expected '-' indicator", token.start_mark,
-        "while parsing a block collection", @marks.pop)
+        "while parsing a block collection", pop_mark)
     end
   end
 
@@ -407,7 +424,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_block_mapping_key(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -431,7 +448,7 @@ class YAML::EventParser < YAML::Scanner
       @event = Event.new(EventKind::MAPPING_END, token.start_mark, token.end_mark)
     else
       error("did not find expected key", token.start_mark,
-        "while parsing a block mapping", @marks.pop)
+        "while parsing a block mapping", pop_mark)
     end
   end
 
@@ -460,7 +477,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_flow_sequence_entry(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -472,7 +489,7 @@ class YAML::EventParser < YAML::Scanner
           token = peek
         else
           error("did not find expected ',' or ']'", token.start_mark,
-            "while parsing a flow sequence", @marks.pop)
+            "while parsing a flow sequence", pop_mark)
         end
       end
 
@@ -535,7 +552,7 @@ class YAML::EventParser < YAML::Scanner
   private def parse_flow_mapping_key(first : Bool) : Nil
     if first
       token = peek
-      @marks << token.start_mark
+      push_mark(token.start_mark)
       skip_token
     end
 
@@ -547,7 +564,7 @@ class YAML::EventParser < YAML::Scanner
           token = peek
         else
           error("did not find expected ',' or '}'", token.start_mark,
-            "while parsing a flow mapping", @marks.pop)
+            "while parsing a flow mapping", pop_mark)
         end
       end
 
