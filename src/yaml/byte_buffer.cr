@@ -37,11 +37,13 @@ class YAML::ByteBuffer
     @bytes.to_unsafe
   end
 
+  # `#ensure_capacity` made room, so the new size is within `@bytes.size`
+  # and `&+=` can't overflow (here and in `#write`).
   @[AlwaysInline]
   def <<(byte : UInt8) : self
     ensure_capacity(1)
     @bytes.to_unsafe[@size] = byte
-    @size += 1
+    @size &+= 1
     @dirty = @size if @size > @dirty
     self
   end
@@ -54,7 +56,7 @@ class YAML::ByteBuffer
   def write(pointer : Pointer(UInt8), count : Int32) : self
     ensure_capacity(count)
     (@bytes.to_unsafe + @size).copy_from(pointer, count)
-    @size += count
+    @size &+= count
     @dirty = @size if @size > @dirty
     self
   end
@@ -118,14 +120,17 @@ class YAML::ByteBuffer
     @bytes[0, @size]
   end
 
+  # The sum of two `Int32` can't overflow an `Int64`.
   @[AlwaysInline]
   private def ensure_capacity(extra : Int32) : Nil
-    needed = @size.to_i64 + extra
+    needed = @size.to_i64 &+ extra
     grow(needed) if needed > @bytes.size
   end
 
   # Doubles the storage until *needed* bytes fit, up to the largest `Bytes`
   # (`Int32::MAX`). Beyond that a scalar couldn't become a `String` anyway.
+  # Not inlined: it runs once per doubling, and `#<<` is inlined everywhere.
+  @[NoInline]
   private def grow(needed : Int64) : Nil
     raise ArgumentError.new("YAML scalar too large") if needed > Int32::MAX
     capacity = Math.max(@bytes.size.to_i64 * 2, 16_i64)

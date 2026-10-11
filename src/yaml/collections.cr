@@ -130,7 +130,9 @@ struct YAML::Queue(T)
     @tail &+= 1
   end
 
-  # yaml_queue_extend
+  # yaml_queue_extend. Not inlined: it runs once per doubling, and LLVM
+  # would otherwise copy it into every inlined `#<<` and `#tail_slot`.
+  @[NoInline]
   private def extend_queue : Nil
     if @head == 0
       capacity = @capacity == 0 ? INITIAL_CAPACITY : @capacity * 2
@@ -191,7 +193,9 @@ struct YAML::Stack(T)
     @buffer
   end
 
-  # yaml_stack_extend
+  # yaml_stack_extend. Not inlined: it runs once per doubling, and LLVM
+  # would otherwise copy it into every inlined `#push`.
+  @[NoInline]
   private def extend_stack : Nil
     capacity = @capacity == 0 ? INITIAL_CAPACITY : @capacity * 2
     buffer = Pointer(T).malloc(capacity)
