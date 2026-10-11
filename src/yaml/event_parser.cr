@@ -193,8 +193,21 @@ class YAML::EventParser < YAML::Scanner
   # yaml_parser_parse_node
   private def parse_node(block : Bool, indentless_sequence : Bool) : Nil
     token = peek
+    kind = token.kind
 
-    if token.kind.alias?
+    # Most nodes are scalars without properties: what the code below does
+    # for them, without keeping its variables.
+    if kind.scalar?
+      @state = @states.pop
+      skip_token
+      plain = token.style.plain?
+      @event = Event.new(EventKind::SCALAR, token.start_mark, token.end_mark,
+        value: token.value, plain_implicit: plain, quoted_implicit: !plain,
+        scalar_style: token.style)
+      return
+    end
+
+    if kind.alias?
       @state = @states.pop
       skip_token
       @event = Event.new(EventKind::ALIAS, token.start_mark, token.end_mark, anchor: token.value)
