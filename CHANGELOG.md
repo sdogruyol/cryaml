@@ -5,7 +5,7 @@
 - Compile time: a release build of a program using `YAML::Serializable`,
   `YAML.parse` and `to_yaml` needs a third less extra LLVM work than with
   0.2.0 (+7.8G instructions over the binding instead of +11.6G; about
-  1.1 s of CPU). `scripts/compile_cost.sh` measures it.
+  1-1.3 s of CPU). `scripts/compile_cost.sh` measures it.
 - Walking `PullParser` events without reading values allocates about what the
   binding does: ASCII scalars of a `String` input that need no folding or
   escapes are built only when `#value` is called (1 MB of manifests: 175 KB
