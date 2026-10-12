@@ -302,6 +302,7 @@ class YAML::PullParser
     raise "Expected #{kind} but was #{self.kind}" unless kind == self.kind
   end
 
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def read_anchor
     @anchor =
       case kind
@@ -335,6 +336,7 @@ class YAML::PullParser
     @nesting -= 1
   end
 
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def increase_alias
     aliases = @anchor_costs.try(&.[@anchor]?) || 0
     @aliases += aliases + 1

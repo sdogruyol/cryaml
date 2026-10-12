@@ -195,21 +195,21 @@ of 3:
 
 | Program | | stdlib (libyaml) | cryaml |
 | --- | --- | ---: | ---: |
-| serializable | LLVM work, release | 52.4G | 60.2G |
-| serializable | LLVM work, debug | 9.8G | 11.5G |
+| serializable | LLVM work, release | 52.4G | 59.9G |
+| serializable | LLVM work, debug | 9.8G | 11.4G |
 | serializable | release build | 9.0 s | 10.4 s |
 | serializable | debug build | 9.2 s | 9.8 s |
 | serializable | debug rebuild after an edit | 1.4 s | 1.4 s |
 | serializable | release binary, stripped | 799 KB + libyaml.so 133 KB | 891 KB |
-| parse | LLVM work, release | 41.7G | 46.8G |
+| parse | LLVM work, release | 41.7G | 46.5G |
 | parse | LLVM work, debug | 8.7G | 9.9G |
 | parse | release build | 7.4 s | 8.0 s |
-| bench | LLVM work, release | 58.9G | 66.5G |
+| bench | LLVM work, release | 58.9G | 66.4G |
 | bench | LLVM work, debug | 11.6G | 13.3G |
 | bench | release build | 9.5 s | 10.8 s |
 
 cryaml's extra release LLVM work for `serializable` was +11.6G in 0.2.0 and
-is +7.8G now (+14.8% over the binding), while parse, pull and nodes got
+is +7.5G now (+14.3% over the binding), while parse, pull and nodes got
 faster still and dump stayed within 0.3%. What remains is mostly the engine
 itself: compiling all of libyaml's C with `gcc -O2` takes about 1.7 s of CPU
 here, a cost the binding's users pay once when libyaml is built. Removing
@@ -229,8 +229,9 @@ per combination of argument types and of keyword arguments, which costs
 debug builds most (`Event` and `Token` construction is positional for
 that reason). Merging calls of a state function into one call with a
 runtime flag, or leaving a primitive to LLVM's own inliner, has made both
-compilation and the parser slower in experiments: what LLVM inlines and
-constant-folds there is what keeps the parser fast.
+compilation and the parser slower in experiments where LLVM chose what to
+inline: what it inlines and constant-folds there is what keeps the parser
+fast.
 
 LLVM also optimizes a function before it inlines it into its callers, and
 then each caller with the inlined code: a method with one caller is
@@ -238,14 +239,23 @@ optimized once on its own and once more in every caller it ends up in, one
 level after the other (the plain scalar scanner was optimized four times).
 The scanner's fetch and scan methods, the reader's decoding steps and the
 emitter's scalar writers are therefore `@[AlwaysInline]` ("one caller"),
-which inlines them before anything is optimized (-0.96G). The event
-parser's states are not: inlined that early into one big function, the
-calls they make land in branches LLVM deems cold, where it doesn't inline
-them, and parsing got 3-6% slower. For the same reason the scanner builds
-its strings with `String.new` written out rather than called. A call that
-omits a default argument compiles to a method of its own without the
-`@[AlwaysInline]`, so the always-inlined methods with an optional argument
-are pairs of overloads instead.
+which inlines them before anything is optimized (-0.96G). So are, as a
+trade, the event parser's states, `#state_machine` and `#parse`, and the
+`PullParser` helpers `#read_next` calls: all go into `#read_next` once (a
+state with a first or empty variant gets it as a flag, rather than being
+inlined twice: inlining each variant cost 0.14G more than leaving the
+states to LLVM). `#parse_node`, called from most states, stays a function.
+Inlined that early into one big function, the calls the states make land
+in branches LLVM deems cold, where it inlines next to nothing: `Event.new`
+and the token queue's head are written out to be inlined there, as the
+scanner's `String.new` is (otherwise parsing was 3-5% slower). That saves
+0.27G for `serializable`, 0.26G for `parse` and 0.17G for `bench`, for up
+to 1.8% more instructions walking events (flow heavy; at most 0.6% on the
+other rows), 0.8% for `YAML.parse_all` and 1.1% for `YAML::Nodes`, dump
+unchanged (callgrind, cryaml only). A call that omits a default argument
+compiles to a method of its own without the `@[AlwaysInline]`, so the
+always-inlined methods with an optional argument are pairs of overloads
+instead.
 
 ## Reproduce
 

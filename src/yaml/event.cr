@@ -49,6 +49,18 @@ struct YAML::Event
   def initialize(@kind : EventKind)
   end
 
+  @[AlwaysInline] # see `.new` below
   def initialize(@kind : EventKind, @start_mark : Mark, @end_mark : Mark)
+  end
+
+  # What Crystal generates from the `initialize` above, written out because
+  # the generated `new` doesn't get its `@[AlwaysInline]`: the event parser,
+  # inlined into `PullParser#read_next`, builds most events in branches
+  # where LLVM wouldn't inline a call.
+  @[AlwaysInline]
+  def self.new(kind : EventKind, start_mark : Mark, end_mark : Mark) : self
+    event = allocate
+    event.initialize(kind, start_mark, end_mark)
+    event
   end
 end

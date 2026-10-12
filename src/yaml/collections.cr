@@ -41,11 +41,12 @@ struct YAML::Queue(T)
     @tail == @head
   end
 
-  # The item at the head of the queue.
+  # The item at the head of the queue. (Not `@buffer[@head]`: LLVM leaves
+  # that `Pointer#[]` a call where the event parser peeks in cold branches.)
   @[AlwaysInline]
   def first : T
     Collections.index_error if empty?
-    @buffer[@head]
+    (@buffer + @head).value
   end
 
   # The item at the head of the queue, in place: valid until the queue is

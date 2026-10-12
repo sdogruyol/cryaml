@@ -89,6 +89,7 @@ class YAML::EventParser < YAML::Scanner
 
   # yaml_parser_parse: replaces `#event` with the next event. As with
   # libyaml, a failure leaves an empty (NONE) event behind.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   def parse : Nil
     if error = @error
       @event = Event.new
@@ -131,37 +132,43 @@ class YAML::EventParser < YAML::Scanner
     Mark.new(0_i64, mark.line, mark.column)
   end
 
-  # yaml_parser_state_machine
+  # yaml_parser_state_machine. Each state function is called once, the
+  # `first` (or `empty`) variant of a state passed as a flag, so that it is
+  # inlined, like this method and `#parse`, once into `PullParser#read_next`
+  # and only optimized there. `#parse_node`, called from most states, stays
+  # a function.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def state_machine : Nil
     case @state
-    in .stream_start?                      then parse_stream_start
-    in .implicit_document_start?           then parse_document_start(true)
-    in .document_start?                    then parse_document_start(false)
+    in .stream_start? then parse_stream_start
+    in .implicit_document_start?, .document_start?
+      parse_document_start(@state.implicit_document_start?)
     in .document_content?                  then parse_document_content
     in .document_end?                      then parse_document_end
     in .block_node?                        then parse_node(true, false)
     in .block_node_or_indentless_sequence? then parse_node(true, true)
     in .flow_node?                         then parse_node(false, false)
-    in .block_sequence_first_entry?        then parse_block_sequence_entry(true)
-    in .block_sequence_entry?              then parse_block_sequence_entry(false)
-    in .indentless_sequence_entry?         then parse_indentless_sequence_entry
-    in .block_mapping_first_key?           then parse_block_mapping_key(true)
-    in .block_mapping_key?                 then parse_block_mapping_key(false)
-    in .block_mapping_value?               then parse_block_mapping_value
-    in .flow_sequence_first_entry?         then parse_flow_sequence_entry(true)
-    in .flow_sequence_entry?               then parse_flow_sequence_entry(false)
+    in .block_sequence_first_entry?, .block_sequence_entry?
+      parse_block_sequence_entry(@state.block_sequence_first_entry?)
+    in .indentless_sequence_entry? then parse_indentless_sequence_entry
+    in .block_mapping_first_key?, .block_mapping_key?
+      parse_block_mapping_key(@state.block_mapping_first_key?)
+    in .block_mapping_value? then parse_block_mapping_value
+    in .flow_sequence_first_entry?, .flow_sequence_entry?
+      parse_flow_sequence_entry(@state.flow_sequence_first_entry?)
     in .flow_sequence_entry_mapping_key?   then parse_flow_sequence_entry_mapping_key
     in .flow_sequence_entry_mapping_value? then parse_flow_sequence_entry_mapping_value
     in .flow_sequence_entry_mapping_end?   then parse_flow_sequence_entry_mapping_end
-    in .flow_mapping_first_key?            then parse_flow_mapping_key(true)
-    in .flow_mapping_key?                  then parse_flow_mapping_key(false)
-    in .flow_mapping_value?                then parse_flow_mapping_value(false)
-    in .flow_mapping_empty_value?          then parse_flow_mapping_value(true)
-    in .end?                               then @event = Event.new
+    in .flow_mapping_first_key?, .flow_mapping_key?
+      parse_flow_mapping_key(@state.flow_mapping_first_key?)
+    in .flow_mapping_value?, .flow_mapping_empty_value?
+      parse_flow_mapping_value(@state.flow_mapping_empty_value?)
+    in .end? then @event = Event.new
     end
   end
 
   # yaml_parser_parse_stream_start
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_stream_start : Nil
     token = peek
     unless token.kind.stream_start?
@@ -173,6 +180,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_document_start
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_document_start(implicit : Bool) : Nil
     token = peek
 
@@ -213,6 +221,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_document_content
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_document_content : Nil
     token = peek
     kind = token.kind
@@ -226,6 +235,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_document_end
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_document_end : Nil
     token = peek
     start_mark = end_mark = token.start_mark
@@ -383,6 +393,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_block_sequence_entry
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_block_sequence_entry(first : Bool) : Nil
     if first
       token = peek
@@ -414,6 +425,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_indentless_sequence_entry
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_indentless_sequence_entry : Nil
     token = peek
     if token.kind.block_entry?
@@ -435,6 +447,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_block_mapping_key
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_block_mapping_key(first : Bool) : Nil
     if first
       token = peek
@@ -467,6 +480,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_block_mapping_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_block_mapping_value : Nil
     token = peek
     if token.kind.value?
@@ -488,6 +502,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_sequence_entry
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_sequence_entry(first : Bool) : Nil
     if first
       token = peek
@@ -527,6 +542,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_key
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_sequence_entry_mapping_key : Nil
     token = peek
     kind = token.kind
@@ -542,6 +558,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_sequence_entry_mapping_value : Nil
     token = peek
     if token.kind.value?
@@ -557,6 +574,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_sequence_entry_mapping_end
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_sequence_entry_mapping_end : Nil
     token = peek
     @state = State::FLOW_SEQUENCE_ENTRY
@@ -564,6 +582,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_mapping_key
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_mapping_key(first : Bool) : Nil
     if first
       token = peek
@@ -607,6 +626,7 @@ class YAML::EventParser < YAML::Scanner
   end
 
   # yaml_parser_parse_flow_mapping_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def parse_flow_mapping_value(empty : Bool) : Nil
     token = peek
     if empty
@@ -628,6 +648,7 @@ class YAML::EventParser < YAML::Scanner
 
   # The SEQUENCE-START or MAPPING-START event of `#parse_node`, but for its
   # style.
+  @[AlwaysInline] # LLVM leaves it a call in `#parse_node`'s cold branches
   private def collection_start_event(kind : EventKind, start_mark : Mark, end_mark : Mark, anchor : String?, tag : String?, implicit : Bool) : Nil
     @event = Event.new(kind, start_mark, end_mark)
     @event.anchor = anchor
@@ -676,6 +697,7 @@ class YAML::EventParser < YAML::Scanner
 
   # yaml_parser_append_tag_directive (without `allow_duplicates`): checks
   # *value* against the %TAG directives read so far.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def check_tag_directive(tag_directives : Array({String, String})?, value : {String, String}, mark : Mark) : Nil
     tag_directives.try &.each do |(handle, _)|
       error("found duplicate %TAG directive", mark) if handle == value[0]
