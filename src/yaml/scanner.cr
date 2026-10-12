@@ -165,6 +165,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_next_token
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_next_token : Nil
     cache(1)
 
@@ -297,9 +298,16 @@ class YAML::Scanner < YAML::Reader
     end
   end
 
+  # yaml_parser_remove_simple_key, of the current flow level's key.
+  # (Overloads rather than a default argument, see `Reader#byte`.)
+  @[AlwaysInline]
+  private def remove_simple_key : Nil
+    remove_simple_key(current_simple_key)
+  end
+
   # yaml_parser_remove_simple_key (*pointer* is `#current_simple_key`).
   @[AlwaysInline]
-  private def remove_simple_key(pointer : Pointer(SimpleKey) = current_simple_key) : Nil
+  private def remove_simple_key(pointer : Pointer(SimpleKey)) : Nil
     simple_key = pointer.value
     # libyaml stores `possible = 0` unconditionally; a key that is not
     # possible needs no store.
@@ -328,12 +336,14 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_increase_flow_level
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def increase_flow_level : Nil
     @flow_simple_keys << SimpleKey.new(false, false, 0_i64, Mark.new)
     @flow_level += 1
   end
 
   # yaml_parser_decrease_flow_level
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def decrease_flow_level : Nil
     if @flow_level != 0
       @flow_level -= 1
@@ -395,6 +405,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_stream_start
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_stream_start : Nil
     @indent = -1
     # libyaml pushes the stream's simple key here; `@simple_key` is that
@@ -406,6 +417,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_stream_end
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_stream_end : Nil
     if @column != 0
       @column = 0_i64
@@ -419,6 +431,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_directive
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_directive : Nil
     unroll_indent(-1_i64)
     remove_simple_key
@@ -457,6 +470,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_flow_entry
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_flow_entry : Nil
     remove_simple_key
     @simple_key_allowed = true
@@ -466,6 +480,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_block_entry
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_block_entry : Nil
     if @flow_level == 0
       unless @simple_key_allowed
@@ -481,6 +496,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_key
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_key : Nil
     if @flow_level == 0
       unless @simple_key_allowed
@@ -496,6 +512,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_value : Nil
     pointer = current_simple_key
     simple_key = pointer.value
@@ -528,6 +545,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_tag
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_tag : Nil
     save_simple_key
     @simple_key_allowed = false
@@ -549,6 +567,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_fetch_plain_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def fetch_plain_scalar : Nil
     save_simple_key
     @simple_key_allowed = false
@@ -556,6 +575,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_to_next_token
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_to_next_token : Nil
     while true
       cache(1)
@@ -599,6 +619,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_directive
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_directive : Token
     start_mark = mark
     skip_ascii(1)
@@ -642,6 +663,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_directive_name
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_directive_name(start_mark : Mark) : String
     string = @string
     string.clear
@@ -666,6 +688,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_version_directive_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_version_directive_value(start_mark : Mark) : {Int32, Int32}
     cache(1)
     while blank?
@@ -713,6 +736,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_tag_directive_value
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_tag_directive_value(start_mark : Mark) : {String, String}
     cache(1)
     while blank?
@@ -745,6 +769,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_anchor
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_anchor(kind : TokenKind) : Token
     string = @string
     string.clear
@@ -772,6 +797,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_tag
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_tag : Token
     start_mark = mark
 
@@ -883,6 +909,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_uri_escapes
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_uri_escapes(directive : Bool, start_mark : Mark, string : ByteBuffer) : Nil
     width = 0
     while true
@@ -917,6 +944,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_block_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_block_scalar(literal : Bool) : Token
     string = @string
     leading_break = @leading_break
@@ -1130,6 +1158,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_flow_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_flow_scalar(single : Bool) : Token
     quote = single ? '\''.ord.to_u8 : '"'.ord.to_u8
 
@@ -1428,6 +1457,7 @@ class YAML::Scanner < YAML::Reader
   end
 
   # yaml_parser_scan_plain_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def scan_plain_scalar : Token
     start_mark = end_mark = mark
 

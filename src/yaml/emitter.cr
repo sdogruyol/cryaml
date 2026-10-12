@@ -196,6 +196,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_need_more_events
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def need_more_events? : Bool
     return true if @events.empty?
     head = @events.first_pointer
@@ -227,6 +228,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_append_tag_directive, for the document's own directives.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def append_tag_directive(value : {String, String}) : Nil
     directives = @tag_directives ||= [] of {String, String}
     directives.each do |directive|
@@ -290,6 +292,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_emit_stream_start
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def emit_stream_start(event : Event*) : Nil
     @open_ended = 0
     if event.value.kind.stream_start?
@@ -786,6 +789,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_analyze_version_directive
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def analyze_version_directive(version : {Int32, Int32}) : Nil
     if version[0] != 1 || (version[1] != 1 && version[1] != 2)
       error("incompatible %YAML directive")
@@ -793,6 +797,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_analyze_tag_directive
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def analyze_tag_directive(directive : {String, String}) : Nil
     handle, prefix = directive
     p = handle.to_unsafe
@@ -1206,6 +1211,7 @@ class YAML::Emitter
   end
 
   # Grows the buffer to OUTPUT_BUFFER_SIZE (see INITIAL_BUFFER_SIZE).
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def grow_buffer : Nil
     return if @capacity == OUTPUT_BUFFER_SIZE
     @capacity = OUTPUT_BUFFER_SIZE
@@ -1404,6 +1410,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_write_anchor
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def write_anchor(p : Pointer(UInt8), length : Int32) : Nil
     i = 0
     while i != length
@@ -1459,6 +1466,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_write_plain_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def write_plain_scalar(p : Pointer(UInt8), length : Int32, allow_breaks : Bool) : Nil
     spaces = false
     breaks = false
@@ -1500,6 +1508,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_write_single_quoted_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def write_single_quoted_scalar(p : Pointer(UInt8), length : Int32, allow_breaks : Bool) : Nil
     spaces = false
     breaks = false
@@ -1543,6 +1552,7 @@ class YAML::Emitter
   end
 
   # yaml_emitter_write_double_quoted_scalar
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def write_double_quoted_scalar(p : Pointer(UInt8), length : Int32, allow_breaks : Bool) : Nil
     spaces = false
 

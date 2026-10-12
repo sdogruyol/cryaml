@@ -106,8 +106,15 @@ class YAML::ByteBuffer
     @size = 0
   end
 
+  # `String.new(@bytes, @size)`, written out (see `Reader#input_to_s`).
+  @[AlwaysInline]
   def to_s : String
-    String.new(@bytes, @size)
+    size = @size
+    return "" if size == 0
+    String.new(size) do |buffer|
+      buffer.copy_from(@bytes, size)
+      {size, 0}
+    end
   end
 
   def to_slice : Bytes

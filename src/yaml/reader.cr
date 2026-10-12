@@ -115,10 +115,18 @@ class YAML::Reader
     update_buffer(length) if @unread < length
   end
 
-  # Byte at *offset* from the current position.
+  # Byte at *offset* from the current position. This method and the character
+  # tests below come in two overloads rather than with a default *offset*:
+  # Crystal compiles a call that omits a default argument as a method of its
+  # own, without the `@[AlwaysInline]`.
   @[AlwaysInline]
-  def byte(offset : Int32 = 0) : UInt8
+  def byte(offset : Int32) : UInt8
     @buffer.to_unsafe[@pos &+ offset]
+  end
+
+  @[AlwaysInline]
+  def byte : UInt8
+    byte(0)
   end
 
   # Pointer to the current position.
@@ -145,9 +153,18 @@ class YAML::Reader
   # characters (the bytes were validated as they were decoded). Knowing the
   # size spares `String#size` a pass over the bytes, and the code that
   # resolves scalars (`YAML::Schema::Core`) asks for it.
+  #
+  # `String.new(@raw + start, finish - start, size)`, written out: it is
+  # inlined into scanner methods so big that LLVM finds the call cold and
+  # would leave it a call.
   @[AlwaysInline]
   def input_to_s(start : Int32, finish : Int32, size : Int32) : String
-    String.new(@raw + start, finish &- start, size)
+    bytesize = finish &- start
+    return "" if bytesize == 0
+    String.new(bytesize) do |buffer|
+      buffer.copy_from(@raw + start, bytesize)
+      {bytesize, size}
+    end
   end
 
   # Appends the input between two `#input_offset`s to *string*.
@@ -157,31 +174,27 @@ class YAML::Reader
   end
 
   @[AlwaysInline]
-  def check?(char : Char, offset : Int32 = 0) : Bool
+  def check?(char : Char, offset : Int32) : Bool
     byte(offset) == char.ord
   end
 
-  {% for name in %w(alpha? digit? hex? z? bom? space? tab? blank? break? crlf? breakz? blankz?) %}
+  @[AlwaysInline]
+  def check?(char : Char) : Bool
+    check?(char, 0)
+  end
+
+  {% for name in %w(alpha? digit? hex? z? bom? space? tab? blank? break? crlf? breakz? blankz? as_digit as_hex width) %}
+    {% type = name.ends_with?("?") ? Bool : Int32 %}
     @[AlwaysInline]
-    def {{name.id}}(offset : Int32 = 0) : Bool
+    def {{name.id}}(offset : Int32) : {{type}}
       Chars.{{name.id}}(@buffer.to_unsafe + @pos, offset)
     end
+
+    @[AlwaysInline]
+    def {{name.id}} : {{type}}
+      {{name.id}}(0)
+    end
   {% end %}
-
-  @[AlwaysInline]
-  def as_digit(offset : Int32 = 0) : Int32
-    Chars.as_digit(@buffer.to_unsafe + @pos, offset)
-  end
-
-  @[AlwaysInline]
-  def as_hex(offset : Int32 = 0) : Int32
-    Chars.as_hex(@buffer.to_unsafe + @pos, offset)
-  end
-
-  @[AlwaysInline]
-  def width(offset : Int32 = 0) : Int32
-    Chars.width(@buffer.to_unsafe + @pos, offset)
-  end
 
   # The primitives below advance the position with wrapping arithmetic
   # (`&+`, `&-`), which skips the overflow checks of `+` and `-`: offsets
@@ -253,9 +266,15 @@ class YAML::Reader
   end
 
   # `#ascii_run` for a run of spaces, eight bytes at a time: indentation is
-  # a large part of most YAML.
+  # a large part of most YAML. (Overloads rather than a default *max*, see
+  # `#byte`.)
   @[AlwaysInline]
-  def space_run(keep : Int32, max : Int32 = Int32::MAX) : Int32
+  def space_run(keep : Int32) : Int32
+    space_run(keep, Int32::MAX)
+  end
+
+  @[AlwaysInline]
+  def space_run(keep : Int32, max : Int32) : Int32
     p = pointer
     limit = Math.min(@unread &- keep, max)
     n = 0
@@ -366,6 +385,7 @@ class YAML::Reader
 
   # `#update_buffer` while `@buffer` is the input string: the same chunks are
   # validated at the same moments, without moving or copying anything.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def update_buffer_in_place(length : Int32) : Nil
     first = true
     while @unread < length
@@ -398,6 +418,7 @@ class YAML::Reader
     raise @scanner_error = ParseException.new(problem, 1, 1)
   end
 
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def determine_encoding : Nil
     while !@eof && @raw_last - @raw_pos < 3
       update_raw_buffer
@@ -458,6 +479,7 @@ class YAML::Reader
   end
 
   # Decodes all complete characters of the raw buffer into `@buffer`.
+  @[AlwaysInline] # one caller: optimized there only, not also on its own
   private def decode_raw_buffer : Nil
     raw_unread = @raw_last - @raw_pos
     return if raw_unread == 0
